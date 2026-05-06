@@ -3,15 +3,19 @@ import type {
   AuditChainVerification,
   Dataset,
   DomainPolicy,
+  ExportArchive,
   ExportFile,
   FieldMapping,
   HealthResponse,
   ExportPackage,
   ExportRequest,
   OperatorInfo,
+  RulePackageBatchResult,
   RulePackage,
+  RulePackageRevision,
   Task,
   TaskResult,
+  TrustedSignerInfo,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
@@ -131,14 +135,46 @@ export function persistExportFile(requestId: string): Promise<ExportFile> {
   });
 }
 
+export function getExportArchives(): Promise<ExportArchive[]> {
+  return request<ExportArchive[]>("/api/export-archives");
+}
+
+export function createExportArchive(
+  exportFileIds: string[],
+  archivedBy: string,
+  purpose: string,
+): Promise<ExportArchive> {
+  return request<ExportArchive>("/api/export-archives", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      export_file_ids: exportFileIds,
+      archived_by: archivedBy,
+      purpose,
+    }),
+  });
+}
+
+export function verifyExportArchive(archiveId: string): Promise<ExportArchive> {
+  return request<ExportArchive>(`/api/export-archives/${archiveId}/verify`);
+}
+
 export function getRulePackages(): Promise<RulePackage[]> {
   return request<RulePackage[]>("/api/rule-packages");
+}
+
+export function getRuleSigners(): Promise<TrustedSignerInfo[]> {
+  return request<TrustedSignerInfo[]>("/api/rule-signers");
 }
 
 export function createRulePackage(
   name: string,
   purpose: string,
+  signerName: string,
   signatureRef: string,
+  signature: string,
   rules: Array<Record<string, unknown>>,
 ): Promise<RulePackage> {
   return request<RulePackage>("/api/rule-packages", {
@@ -150,9 +186,29 @@ export function createRulePackage(
       name,
       purpose,
       version: "0.1.0",
+      signer_name: signerName,
       signature_ref: signatureRef,
+      signature,
       rules,
-      notes: "Stage 1 规则包骨架：仅保存规则包元数据，不包含任何数据。",
+      notes: "Stage 8 规则包登记：包含签名人、RSA 签名引用和签名值，用于本域公私钥验签。",
+    }),
+  });
+}
+
+export function verifyRulePackage(rulePackageId: string): Promise<RulePackage> {
+  return request<RulePackage>(`/api/rule-packages/${rulePackageId}/verify`, {
+    method: "POST",
+  });
+}
+
+export function batchVerifyRulePackages(packageIds: string[]): Promise<RulePackageBatchResult[]> {
+  return request<RulePackageBatchResult[]>("/api/rule-packages/batch-verify", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      package_ids: packageIds,
     }),
   });
 }
@@ -169,10 +225,29 @@ export function approveRulePackage(rulePackageId: string, approverName: string):
   });
 }
 
+export function batchApproveRulePackages(
+  packageIds: string[],
+  approverName: string,
+  comment?: string,
+): Promise<RulePackageBatchResult[]> {
+  return request<RulePackageBatchResult[]>("/api/rule-packages/batch-approve", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      package_ids: packageIds,
+      approver_name: approverName,
+      comment,
+    }),
+  });
+}
+
 export function createTask(
   name: string,
   datasetIds: string[],
   rulePackageId: string | null,
+  rulePackageRevisionId: string | null,
   outputPolicy: "local_only" | "execution_receipt" | "manual_assertion" | "aggregate_summary",
   aggregateThreshold?: number,
   aggregateGroupBy?: "department" | "matter_type" | "month",
@@ -186,6 +261,7 @@ export function createTask(
       name,
       dataset_ids: datasetIds,
       rule_package_id: rulePackageId,
+      rule_package_revision_id: rulePackageRevisionId,
       output_policy: outputPolicy,
       aggregate_threshold: aggregateThreshold,
       aggregate_group_by: aggregateGroupBy,
@@ -199,4 +275,121 @@ export function getAudit(): Promise<AuditEntry[]> {
 
 export function verifyAuditChain(): Promise<AuditChainVerification> {
   return request<AuditChainVerification>("/api/audit/verify");
+}
+
+export function getRulePackageCenterPackages(): Promise<RulePackage[]> {
+  return request<RulePackage[]>("/api/rule-package-center/packages");
+}
+
+export function createRulePackageDraft(payload: {
+  name: string;
+  version: string;
+  purpose: string;
+  signer_name: string;
+  signature_ref: string;
+  signature: string;
+  rules: Array<Record<string, unknown>>;
+  notes?: string;
+  editor_name: string;
+  change_summary?: string;
+}): Promise<RulePackage> {
+  return request<RulePackage>("/api/rule-package-center/packages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getRulePackageRevisions(rulePackageId: string): Promise<RulePackageRevision[]> {
+  return request<RulePackageRevision[]>(`/api/rule-package-center/packages/${rulePackageId}/revisions`);
+}
+
+export function beginRulePackageEdit(rulePackageId: string, editorName: string): Promise<RulePackageRevision> {
+  const search = new URLSearchParams({ editor_name: editorName }).toString();
+  return request<RulePackageRevision>(`/api/rule-package-center/packages/${rulePackageId}/edit?${search}`, {
+    method: "POST",
+  });
+}
+
+export function saveRulePackageDraft(rulePackageId: string, payload: {
+  name: string;
+  version: string;
+  purpose: string;
+  signer_name: string;
+  signature_ref: string;
+  signature: string;
+  rules: Array<Record<string, unknown>>;
+  notes?: string;
+  editor_name: string;
+  change_summary?: string;
+  auto_saved?: boolean;
+}): Promise<RulePackageRevision> {
+  return request<RulePackageRevision>(`/api/rule-package-center/packages/${rulePackageId}/draft-save`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function submitRulePackageVerification(rulePackageId: string): Promise<RulePackage> {
+  return request<RulePackage>(`/api/rule-package-center/packages/${rulePackageId}/submit-verification`, {
+    method: "POST",
+  });
+}
+
+export function approveRulePackageCenter(rulePackageId: string, approverName: string, comment?: string): Promise<RulePackage> {
+  return request<RulePackage>(`/api/rule-package-center/packages/${rulePackageId}/approve`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      approver_name: approverName,
+      comment,
+    }),
+  });
+}
+
+export function deprecateRulePackage(rulePackageId: string, operatorName: string, reason: string): Promise<RulePackage> {
+  return request<RulePackage>(`/api/rule-package-center/packages/${rulePackageId}/deprecate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      operator_name: operatorName,
+      reason,
+    }),
+  });
+}
+
+export async function deleteRulePackage(rulePackageId: string): Promise<void> {
+  await request<{ status: string }>(`/api/rule-package-center/packages/${rulePackageId}`, {
+    method: "DELETE",
+  });
+}
+
+export function reviewAssertion(
+  resultId: string,
+  reviewerName: string,
+  decision: "approved" | "rejected",
+  finalStatement?: string,
+  comment?: string,
+): Promise<TaskResult> {
+  return request<TaskResult>(`/api/results/${resultId}/assertion/review`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      reviewer_name: reviewerName,
+      decision,
+      final_statement: finalStatement,
+      comment,
+    }),
+  });
 }

@@ -45,6 +45,7 @@ class TaskCreate(BaseModel):
     name: str
     dataset_ids: list[str] = Field(default_factory=list)
     rule_package_id: str | None = None
+    rule_package_revision_id: str | None = None
     output_policy: Literal["local_only", "execution_receipt", "manual_assertion", "aggregate_summary"] = "local_only"
     aggregate_threshold: int | None = None
     aggregate_group_by: Literal["department", "matter_type", "month"] | None = None
@@ -56,6 +57,7 @@ class Task(BaseModel):
     name: str
     dataset_ids: list[str] = Field(default_factory=list)
     rule_package_id: str | None = None
+    rule_package_revision_id: str | None = None
     output_policy: Literal["local_only", "execution_receipt", "manual_assertion", "aggregate_summary"] = "local_only"
     aggregate_threshold: int | None = None
     aggregate_group_by: Literal["department", "matter_type", "month"] | None = None
@@ -64,26 +66,88 @@ class Task(BaseModel):
     created_at: str
 
 
+def required_text(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("字段不能为空")
+    return cleaned
+
+
 class RulePackageCreate(BaseModel):
     name: str
     version: str = "0.1.0"
     purpose: str
-    signature_ref: str
+    signer_name: str = ""
+    signature_ref: str = ""
+    signature: str = ""
     rules: list[dict[str, Any]] = Field(default_factory=list)
     notes: str | None = None
+    editor_name: str = "经办员A"
+    change_summary: str | None = None
 
-    @field_validator("signature_ref")
+    @field_validator("name", "purpose", "editor_name")
     @classmethod
-    def signature_ref_required(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("规则包签名引用不能为空")
-        return cleaned
+    def validate_required_fields(cls, value: str) -> str:
+        return required_text(value)
+
+    @field_validator("signer_name", "signature_ref", "signature")
+    @classmethod
+    def trim_signature_fields(cls, value: str) -> str:
+        return value.strip()
+
+
+class RulePackageDraftSave(BaseModel):
+    name: str
+    version: str = "0.1.0"
+    purpose: str
+    signer_name: str = ""
+    signature_ref: str = ""
+    signature: str = ""
+    rules: list[dict[str, Any]] = Field(default_factory=list)
+    notes: str | None = None
+    editor_name: str
+    change_summary: str | None = None
+    auto_saved: bool = False
+
+    @field_validator("name", "purpose", "editor_name")
+    @classmethod
+    def validate_required_fields(cls, value: str) -> str:
+        return required_text(value)
+
+    @field_validator("signer_name", "signature_ref", "signature")
+    @classmethod
+    def trim_signature_fields(cls, value: str) -> str:
+        return value.strip()
 
 
 class RulePackageApprove(BaseModel):
     approver_name: str
     comment: str | None = None
+
+    @field_validator("approver_name")
+    @classmethod
+    def validate_approver(cls, value: str) -> str:
+        return required_text(value)
+
+
+class RulePackageBatchAction(BaseModel):
+    package_ids: list[str] = Field(default_factory=list)
+    approver_name: str | None = None
+    comment: str | None = None
+
+
+class RulePackageDeprecate(BaseModel):
+    operator_name: str
+    reason: str
+
+    @field_validator("operator_name", "reason")
+    @classmethod
+    def validate_required_fields(cls, value: str) -> str:
+        return required_text(value)
+
+
+RulePackageStatus = Literal["draft", "pending_review", "approved", "invalid", "deprecated", "deleted"]
+RulePackageVerificationStatus = Literal["not_signed", "verified", "failed", "legacy_unverified"]
 
 
 class RulePackage(BaseModel):
@@ -91,14 +155,65 @@ class RulePackage(BaseModel):
     name: str
     version: str
     purpose: str
-    signature_ref: str = "LEGACY-NO-SIGNATURE"
+    signer_name: str = ""
+    signature_ref: str = ""
+    signature: str = ""
     rules: list[dict[str, Any]] = Field(default_factory=list)
     rules_count: int
-    status: Literal["imported", "pending_review", "approved", "rejected", "invalid"] = "pending_review"
+    status: RulePackageStatus = "draft"
+    verification_status: RulePackageVerificationStatus = "not_signed"
+    verification_message: str | None = None
+    verified_at: str | None = None
     approved_by: str | None = None
     approved_at: str | None = None
     created_at: str
+    updated_at: str | None = None
+    current_revision_id: str | None = None
+    current_revision_no: int = 1
+    latest_editor_name: str | None = None
+    latest_edited_at: str | None = None
+    signature_outdated: bool = True
+    deleted_at: str | None = None
+    deprecated_at: str | None = None
+    deprecated_by: str | None = None
+    deprecation_reason: str | None = None
     notes: str | None = None
+
+
+class RulePackageRevision(BaseModel):
+    id: str
+    rule_package_id: str
+    revision_no: int
+    name: str
+    version: str
+    purpose: str
+    signer_name: str = ""
+    signature_ref: str = ""
+    signature: str = ""
+    rules: list[dict[str, Any]] = Field(default_factory=list)
+    rules_count: int
+    status: RulePackageStatus = "draft"
+    verification_status: RulePackageVerificationStatus = "not_signed"
+    verification_message: str | None = None
+    verified_at: str | None = None
+    approved_by: str | None = None
+    approved_at: str | None = None
+    notes: str | None = None
+    change_summary: str | None = None
+    editor_name: str | None = None
+    saved_by_auto: bool = False
+    signature_outdated: bool = True
+    based_on_revision_id: str | None = None
+    content_hash: str
+    created_at: str
+
+
+class RulePackageBatchResult(BaseModel):
+    package_id: str
+    name: str
+    success: bool
+    status: str
+    message: str
 
 
 class OperatorInfo(BaseModel):
@@ -109,6 +224,16 @@ class OperatorInfo(BaseModel):
     output_boundary: Literal["local_only", "safe_summary"]
 
 
+class AssertionReviewState(BaseModel):
+    status: Literal["pending_review", "approved", "rejected"]
+    statement: str
+    created_at: str
+    reviewer_name: str | None = None
+    reviewed_at: str | None = None
+    review_comment: str | None = None
+    rejection_reason: str | None = None
+
+
 class TaskResult(BaseModel):
     id: str
     task_id: str
@@ -116,7 +241,7 @@ class TaskResult(BaseModel):
     created_at: str
     summary: dict[str, Any] = Field(default_factory=dict)
     receipt: dict[str, Any] = Field(default_factory=dict)
-    assertion: dict[str, Any] | None = None
+    assertion: AssertionReviewState | None = None
     aggregate_summary: list[dict[str, Any]] = Field(default_factory=list)
     suppressed_groups: int = 0
     local_security_notes: list[str] = Field(default_factory=list)
@@ -131,10 +256,7 @@ class ExportRequestCreate(BaseModel):
     @field_validator("requester_name", "purpose")
     @classmethod
     def non_empty_text(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("字段不能为空")
-        return cleaned
+        return required_text(value)
 
 
 class ExportRequestApprove(BaseModel):
@@ -144,10 +266,7 @@ class ExportRequestApprove(BaseModel):
     @field_validator("approver_name")
     @classmethod
     def approver_required(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("审批人不能为空")
-        return cleaned
+        return required_text(value)
 
 
 class ExportRequest(BaseModel):
@@ -185,6 +304,54 @@ class ExportFile(BaseModel):
     safety_notes: list[str] = Field(default_factory=list)
 
 
+class ExportArchiveCreate(BaseModel):
+    export_file_ids: list[str] = Field(default_factory=list)
+    archived_by: str
+    purpose: str
+
+    @field_validator("archived_by", "purpose")
+    @classmethod
+    def archive_text_required(cls, value: str) -> str:
+        return required_text(value)
+
+
+class ExportArchiveVerification(BaseModel):
+    valid: bool
+    manifest_hash: str
+    signature_verified: bool
+    audit_chain_valid: bool
+    errors: list[str] = Field(default_factory=list)
+
+
+class ExportArchive(BaseModel):
+    id: str
+    export_file_ids: list[str] = Field(default_factory=list)
+    archived_by: str
+    purpose: str
+    archived_at: str
+    archive_dir: str
+    manifest_path: str
+    report_path: str
+    signature_path: str
+    signer_name: str
+    signer_key_ref: str
+    manifest_hash: str
+    file_count: int
+    verification: ExportArchiveVerification
+
+
+class AssertionReviewRequest(BaseModel):
+    reviewer_name: str
+    decision: Literal["approved", "rejected"]
+    final_statement: str | None = None
+    comment: str | None = None
+
+    @field_validator("reviewer_name")
+    @classmethod
+    def reviewer_required(cls, value: str) -> str:
+        return required_text(value)
+
+
 class AuditEntry(BaseModel):
     id: str
     action: str
@@ -202,6 +369,15 @@ class AuditChainVerification(BaseModel):
     first_invalid_index: int | None = None
     head_hash: str | None = None
     errors: list[str] = Field(default_factory=list)
+
+
+class TrustedSignerInfo(BaseModel):
+    signer_name: str
+    key_type: Literal["rsa-public-key"]
+    signature_ref: str
+    status: Literal["active", "disabled"]
+    public_key_path: str
+    description: str | None = None
 
 
 class HealthResponse(BaseModel):

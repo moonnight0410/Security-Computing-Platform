@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from typing import Any
 
-from app.models.schemas import Dataset, FieldMapping, Task, TaskResult
+from app.models.schemas import AssertionReviewState, Dataset, FieldMapping, Task, TaskResult
 from app.services.audit import utc_now
 
 
@@ -157,10 +157,11 @@ def execute_local_task(
 
     assertion = None
     if task.output_policy == "manual_assertion":
-        assertion = {
-            "status": "pending_review",
-            "statement": "结论声明草稿已生成，需审核人与执行人分离审批后方可输出。",
-        }
+        assertion = AssertionReviewState(
+            status="pending_review",
+            statement="结论声明草稿已生成，需审核人与执行人分离审批后方可输出。",
+            created_at=utc_now(),
+        )
 
     summary = {
         "dataset_count": 1,
@@ -177,6 +178,7 @@ def execute_local_task(
     receipt = {
         "task_id": task.id,
         "rule_package_id": task.rule_package_id,
+        "rule_package_revision_id": task.rule_package_revision_id,
         "status": "completed",
         "executed_at": utc_now(),
         "output_policy": task.output_policy,

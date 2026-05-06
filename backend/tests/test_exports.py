@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.models.schemas import ExportRequestCreate, TaskResult
+from app.models.schemas import AssertionReviewState, ExportRequestCreate, TaskResult
 from app.services.audit import utc_now
 from app.services import exports
 from app.services.exports import approve_export_request, build_export_package, create_export_request, persist_export_package
@@ -24,10 +24,11 @@ def sample_result() -> TaskResult:
             "status": "completed",
             "output_policy": "aggregate_summary",
         },
-        assertion={
-            "status": "pending_review",
-            "statement": "结论声明草稿已生成，需审核人与执行人分离审批后方可输出。",
-        },
+        assertion=AssertionReviewState(
+            status="pending_review",
+            statement="结论声明草稿已生成，需审核人与执行人分离审批后方可输出。",
+            created_at=utc_now(),
+        ),
         aggregate_summary=[
             {
                 "dimension": "department",
@@ -87,6 +88,30 @@ class ExportApprovalTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "没有可输出的结论声明"):
             build_export_package(request, result)
+
+    def test_assertion_package_requires_formal_review(self) -> None:
+        request = approve_export_request(self.make_request("assertion"), "审核员B")
+
+        with self.assertRaisesRegex(ValueError, "尚未完成正式审核"):
+            build_export_package(request, sample_result())
+
+    def test_assertion_package_uses_approved_statement_only(self) -> None:
+        request = approve_export_request(self.make_request("assertion"), "审核员B")
+        result = sample_result()
+        result.assertion = AssertionReviewState(
+            status="approved",
+            statement="审核通过：仅可输出摘要性结论，不包含任何对象级明细。",
+            created_at=utc_now(),
+            reviewer_name="审核员C",
+            reviewed_at=utc_now(),
+            review_comment="同意输出摘要性结论",
+        )
+
+        package = build_export_package(request, result)
+
+        self.assertEqual(set(package.payload.keys()), {"assertion"})
+        self.assertIn("审核通过", str(package.payload))
+        self.assertNotIn("P0001", str(package.model_dump()))
 
     def test_persisted_export_file_contains_only_approved_safe_payload(self) -> None:
         request = approve_export_request(self.make_request("aggregate_summary"), "审核员B")

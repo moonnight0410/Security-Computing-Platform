@@ -209,7 +209,7 @@ class LocalExecutionTests(unittest.TestCase):
         result = execute_local_task(task, dataset, self.mapping())
 
         self.assertIsNotNone(result.assertion)
-        self.assertEqual(result.assertion["status"], "pending_review")
+        self.assertEqual(result.assertion.status, "pending_review")
         self.assertEqual(result.receipt["output_policy"], "manual_assertion")
 
     def test_execution_receipt_contains_no_dataset_values(self) -> None:

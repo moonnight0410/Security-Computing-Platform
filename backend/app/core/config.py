@@ -8,9 +8,15 @@ IMPORTS_DIR = WORKSPACE_ROOT / "imports"
 CONFIG_DIR = WORKSPACE_ROOT / "config"
 AUDIT_DIR = WORKSPACE_ROOT / "audit"
 EXPORTS_DIR = WORKSPACE_ROOT / "exports"
+ARCHIVES_DIR = WORKSPACE_ROOT / "archives"
+KEYS_DIR = CONFIG_DIR / "keys"
+PUBLIC_KEYS_DIR = KEYS_DIR / "public"
+PRIVATE_KEYS_DIR = KEYS_DIR / "private"
 
 STATE_FILE = CONFIG_DIR / "app-state.json"
 DB_FILE = CONFIG_DIR / "app-state.sqlite3"
+TRUSTED_SIGNERS_FILE = CONFIG_DIR / "trusted-signers.json"
+ARCHIVE_SIGNER_FILE = CONFIG_DIR / "archive-signer.json"
 
 
 def ensure_workspace() -> None:

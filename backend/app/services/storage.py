@@ -10,22 +10,113 @@ DEFAULT_STATE: dict[str, list[dict[str, Any]]] = {
     "datasets": [],
     "field_mappings": [],
     "rule_packages": [],
+    "rule_package_revisions": [],
     "tasks": [],
     "results": [],
     "export_requests": [],
     "export_files": [],
+    "export_archives": [],
     "audit": [],
 }
 
 
-def normalize_state(state: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+def normalize_rule_packages(state: dict[str, list[dict[str, Any]]]) -> None:
+    revisions = state.setdefault("rule_package_revisions", [])
+    revisions_by_package: dict[str, list[dict[str, Any]]] = {}
+    for revision in revisions:
+        package_id = str(revision.get("rule_package_id") or "")
+        if package_id:
+            revisions_by_package.setdefault(package_id, []).append(revision)
+
     for package in state.get("rule_packages", []):
-        package.setdefault("signature_ref", "LEGACY-NO-SIGNATURE")
-        if package.get("status") == "imported":
-            package["status"] = "pending_review"
+        package.setdefault("signer_name", "")
+        package.setdefault("signature_ref", "")
+        package.setdefault("signature", "")
+        package.setdefault("verification_status", "legacy_unverified")
+        package.setdefault("verification_message", None)
+        package.setdefault("verified_at", None)
+        if package.get("status") in {"imported", "rejected"}:
+            package["status"] = "draft"
+        package.setdefault("updated_at", package.get("created_at"))
+        package.setdefault("latest_editor_name", package.get("approved_by"))
+        package.setdefault("latest_edited_at", package.get("updated_at"))
+        package.setdefault("signature_outdated", package.get("verification_status") != "verified")
+        package.setdefault("deleted_at", None)
+        package.setdefault("deprecated_at", None)
+        package.setdefault("deprecated_by", None)
+        package.setdefault("deprecation_reason", None)
+
+        package_revisions = revisions_by_package.get(str(package.get("id")), [])
+        if not package_revisions:
+            revision_id = f"{package['id']}-rev-1"
+            revision_status = package["status"]
+            revision = {
+                "id": revision_id,
+                "rule_package_id": package["id"],
+                "revision_no": 1,
+                "name": package.get("name"),
+                "version": package.get("version", "0.1.0"),
+                "purpose": package.get("purpose"),
+                "signer_name": package.get("signer_name", ""),
+                "signature_ref": package.get("signature_ref", ""),
+                "signature": package.get("signature", ""),
+                "rules": package.get("rules", []),
+                "rules_count": package.get("rules_count", len(package.get("rules", []))),
+                "status": revision_status,
+                "verification_status": package.get("verification_status", "legacy_unverified"),
+                "verification_message": package.get("verification_message"),
+                "verified_at": package.get("verified_at"),
+                "approved_by": package.get("approved_by"),
+                "approved_at": package.get("approved_at"),
+                "notes": package.get("notes"),
+                "change_summary": "Migrated existing rule package into Stage 9 revision history",
+                "editor_name": package.get("latest_editor_name") or package.get("approved_by"),
+                "saved_by_auto": False,
+                "signature_outdated": package.get("verification_status") != "verified",
+                "based_on_revision_id": None,
+                "content_hash": f"legacy-{package['id']}",
+                "created_at": package.get("created_at"),
+            }
+            revisions.append(revision)
+            package_revisions = [revision]
+            revisions_by_package[str(package["id"])] = package_revisions
+
+        package_revisions.sort(key=lambda item: (int(item.get("revision_no", 0)), str(item.get("created_at", ""))))
+        current_revision = package_revisions[-1]
+        package.setdefault("current_revision_id", current_revision.get("id"))
+        package.setdefault("current_revision_no", int(current_revision.get("revision_no", 1)))
+        package["rules"] = current_revision.get("rules", package.get("rules", []))
+        package["rules_count"] = current_revision.get("rules_count", len(package["rules"]))
+        package["signer_name"] = current_revision.get("signer_name", package.get("signer_name", ""))
+        package["signature_ref"] = current_revision.get("signature_ref", package.get("signature_ref", ""))
+        package["signature"] = current_revision.get("signature", package.get("signature", ""))
+        package["verification_status"] = current_revision.get(
+            "verification_status",
+            package.get("verification_status", "legacy_unverified"),
+        )
+        package["verification_message"] = current_revision.get("verification_message")
+        package["verified_at"] = current_revision.get("verified_at")
+        package["approved_by"] = current_revision.get("approved_by")
+        package["approved_at"] = current_revision.get("approved_at")
+        package["notes"] = current_revision.get("notes")
+        package["latest_editor_name"] = current_revision.get("editor_name") or package.get("latest_editor_name")
+        package["latest_edited_at"] = current_revision.get("created_at") or package.get("latest_edited_at")
+        package["signature_outdated"] = current_revision.get("signature_outdated", package.get("signature_outdated", True))
+
+
+def normalize_state(state: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    normalize_rule_packages(state)
 
     for task in state.get("tasks", []):
         task.setdefault("rule_package_id", None)
+        if not task.get("rule_package_revision_id") and task.get("rule_package_id"):
+            package = next(
+                (item for item in state.get("rule_packages", []) if item.get("id") == task.get("rule_package_id")),
+                None,
+            )
+            if package:
+                task["rule_package_revision_id"] = package.get("current_revision_id")
+        task.setdefault("rule_package_revision_id", None)
         task.setdefault("output_policy", "local_only")
         task.setdefault("aggregate_threshold", None)
         task.setdefault("aggregate_group_by", None)
@@ -35,6 +126,15 @@ def normalize_state(state: dict[str, list[dict[str, Any]]]) -> dict[str, list[di
         request.setdefault("approver_name", None)
         request.setdefault("approved_at", None)
         request.setdefault("rejection_reason", None)
+
+    for result in state.get("results", []):
+        assertion = result.get("assertion")
+        if isinstance(assertion, dict):
+            assertion.setdefault("created_at", result.get("created_at"))
+            assertion.setdefault("reviewer_name", None)
+            assertion.setdefault("reviewed_at", None)
+            assertion.setdefault("review_comment", None)
+            assertion.setdefault("rejection_reason", None)
 
     return state
 

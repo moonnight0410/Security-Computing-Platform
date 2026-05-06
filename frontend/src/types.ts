@@ -34,6 +34,7 @@ export type Task = {
   name: string;
   dataset_ids: string[];
   rule_package_id?: string | null;
+  rule_package_revision_id?: string | null;
   output_policy: "local_only" | "execution_receipt" | "manual_assertion" | "aggregate_summary";
   aggregate_threshold?: number | null;
   aggregate_group_by?: "department" | "matter_type" | "month" | null;
@@ -49,10 +50,20 @@ export type TaskResult = {
   created_at: string;
   summary: Record<string, unknown>;
   receipt: Record<string, unknown>;
-  assertion?: Record<string, unknown> | null;
+  assertion?: AssertionReviewState | null;
   aggregate_summary: Array<Record<string, unknown>>;
   suppressed_groups: number;
   local_security_notes: string[];
+};
+
+export type AssertionReviewState = {
+  status: "pending_review" | "approved" | "rejected";
+  statement: string;
+  created_at: string;
+  reviewer_name?: string | null;
+  reviewed_at?: string | null;
+  review_comment?: string | null;
+  rejection_reason?: string | null;
 };
 
 export type RulePackage = {
@@ -60,14 +71,64 @@ export type RulePackage = {
   name: string;
   version: string;
   purpose: string;
+  signer_name: string;
   signature_ref: string;
+  signature: string;
   rules: Array<Record<string, unknown>>;
   rules_count: number;
-  status: "pending_review" | "approved" | "rejected" | "invalid";
+  status: "draft" | "pending_review" | "approved" | "invalid" | "deprecated" | "deleted";
+  verification_status: "not_signed" | "verified" | "failed" | "legacy_unverified";
+  verification_message?: string | null;
+  verified_at?: string | null;
   approved_by?: string | null;
   approved_at?: string | null;
   created_at: string;
+  updated_at?: string | null;
+  current_revision_id?: string | null;
+  current_revision_no: number;
+  latest_editor_name?: string | null;
+  latest_edited_at?: string | null;
+  signature_outdated: boolean;
+  deprecated_at?: string | null;
+  deprecated_by?: string | null;
+  deprecation_reason?: string | null;
   notes?: string | null;
+};
+
+export type RulePackageRevision = {
+  id: string;
+  rule_package_id: string;
+  revision_no: number;
+  name: string;
+  version: string;
+  purpose: string;
+  signer_name: string;
+  signature_ref: string;
+  signature: string;
+  rules: Array<Record<string, unknown>>;
+  rules_count: number;
+  status: "draft" | "pending_review" | "approved" | "invalid" | "deprecated" | "deleted";
+  verification_status: "not_signed" | "verified" | "failed" | "legacy_unverified";
+  verification_message?: string | null;
+  verified_at?: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  notes?: string | null;
+  change_summary?: string | null;
+  editor_name?: string | null;
+  saved_by_auto: boolean;
+  signature_outdated: boolean;
+  based_on_revision_id?: string | null;
+  content_hash: string;
+  created_at: string;
+};
+
+export type RulePackageBatchResult = {
+  package_id: string;
+  name: string;
+  success: boolean;
+  status: string;
+  message: string;
 };
 
 export type OperatorInfo = {
@@ -113,6 +174,31 @@ export type ExportFile = {
   safety_notes: string[];
 };
 
+export type ExportArchiveVerification = {
+  valid: boolean;
+  manifest_hash: string;
+  signature_verified: boolean;
+  audit_chain_valid: boolean;
+  errors: string[];
+};
+
+export type ExportArchive = {
+  id: string;
+  export_file_ids: string[];
+  archived_by: string;
+  purpose: string;
+  archived_at: string;
+  archive_dir: string;
+  manifest_path: string;
+  report_path: string;
+  signature_path: string;
+  signer_name: string;
+  signer_key_ref: string;
+  manifest_hash: string;
+  file_count: number;
+  verification: ExportArchiveVerification;
+};
+
 export type AuditEntry = {
   id: string;
   action: string;
@@ -129,6 +215,15 @@ export type AuditChainVerification = {
   first_invalid_index?: number | null;
   head_hash?: string | null;
   errors: string[];
+};
+
+export type TrustedSignerInfo = {
+  signer_name: string;
+  key_type: "rsa-public-key";
+  signature_ref: string;
+  status: "active" | "disabled";
+  public_key_path: string;
+  description?: string | null;
 };
 
 export type HealthResponse = {

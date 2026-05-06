@@ -38,6 +38,8 @@ def build_export_package(request: ExportRequest, result: TaskResult) -> ExportPa
     elif request.export_type == "assertion":
         if not result.assertion:
             raise ValueError("该结果没有可输出的结论声明")
+        if result.assertion.status != "approved":
+            raise ValueError("结论声明尚未完成正式审核，不能输出")
         payload = {"assertion": result.assertion}
     elif request.export_type == "aggregate_summary":
         if not result.aggregate_summary:

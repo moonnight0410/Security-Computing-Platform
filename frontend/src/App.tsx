@@ -3,6 +3,9 @@ import { FormEvent, startTransition, useEffect, useState } from "react";
 import {
   approveExportRequest,
   approveRulePackage,
+  batchApproveRulePackages,
+  batchVerifyRulePackages,
+  createExportArchive,
   createExportRequest,
   createRulePackage,
   createTask,
@@ -10,6 +13,7 @@ import {
   getAudit,
   getDatasets,
   getDomainPolicy,
+  getExportArchives,
   getFieldMapping,
   getHealth,
   getExportFiles,
@@ -17,27 +21,35 @@ import {
   getExportRequests,
   getOperators,
   getRulePackages,
+  getRuleSigners,
   getResults,
   getTasks,
   persistExportFile,
+  reviewAssertion,
   saveFieldMapping,
   uploadDataset,
+  verifyExportArchive,
+  verifyRulePackage,
   verifyAuditChain,
 } from "./api";
+import RulePackageCenter from "./RulePackageCenter";
 import type {
   AuditChainVerification,
   AuditEntry,
   Dataset,
   DomainPolicy,
+  ExportArchive,
   ExportFile,
   ExportPackage,
   ExportRequest,
   FieldMapping,
   HealthResponse,
   OperatorInfo,
+  RulePackageBatchResult,
   RulePackage,
   Task,
   TaskResult,
+  TrustedSignerInfo,
 } from "./types";
 
 const STAGE_CARDS = [
@@ -59,10 +71,12 @@ export default function App() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [fieldMapping, setFieldMapping] = useState<FieldMapping | null>(null);
   const [rulePackages, setRulePackages] = useState<RulePackage[]>([]);
+  const [trustedSigners, setTrustedSigners] = useState<TrustedSignerInfo[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [results, setResults] = useState<TaskResult[]>([]);
   const [exportRequests, setExportRequests] = useState<ExportRequest[]>([]);
   const [exportFiles, setExportFiles] = useState<ExportFile[]>([]);
+  const [exportArchives, setExportArchives] = useState<ExportArchive[]>([]);
   const [exportPackage, setExportPackage] = useState<ExportPackage | null>(null);
   const [auditVerification, setAuditVerification] = useState<AuditChainVerification | null>(null);
   const [operators, setOperators] = useState<OperatorInfo[]>([]);
@@ -72,7 +86,9 @@ export default function App() {
   const [taskName, setTaskName] = useState("本域联查任务草稿");
   const [rulePackageName, setRulePackageName] = useState("事项规则包草稿");
   const [rulePackagePurpose, setRulePackagePurpose] = useState("下发不含数据的联查问题、规则说明和算子声明");
-  const [rulePackageSignatureRef, setRulePackageSignatureRef] = useState("SIG-STAGE1-DEMO");
+  const [rulePackageSignerName, setRulePackageSignerName] = useState("市级规则中心");
+  const [rulePackageSignatureRef, setRulePackageSignatureRef] = useState("SIG-CENTER-001");
+  const [rulePackageSignature, setRulePackageSignature] = useState("");
   const [ruleField, setRuleField] = useState("benefit_status");
   const [ruleOperator, setRuleOperator] = useState<"eq" | "neq" | "exists" | "not_empty" | "gte" | "lte">("eq");
   const [ruleValue, setRuleValue] = useState("正常");
@@ -90,8 +106,17 @@ export default function App() {
   const [exportRequester, setExportRequester] = useState("经办人A");
   const [exportApprover, setExportApprover] = useState("审核员B");
   const [exportPurpose, setExportPurpose] = useState("事项办理结果反馈");
-  const [notice, setNotice] = useState("系统处于 Stage 6：输出包受控落盘与审计链校验阶段");
+  const [assertionReviewer, setAssertionReviewer] = useState("审核员C");
+  const [assertionFinalStatement, setAssertionFinalStatement] = useState("");
+  const [assertionComment, setAssertionComment] = useState("");
+  const [selectedRulePackageIds, setSelectedRulePackageIds] = useState<string[]>([]);
+  const [selectedExportFileIds, setSelectedExportFileIds] = useState<string[]>([]);
+  const [archiveOperator, setArchiveOperator] = useState("归档员A");
+  const [archivePurpose, setArchivePurpose] = useState("归档封存与验签报告生成");
+  const [batchMessage, setBatchMessage] = useState<RulePackageBatchResult[] | null>(null);
+  const [notice, setNotice] = useState("系统处于 Stage 9：规则包中心、修订快照与编辑治理阶段");
   const [isPending, setIsPending] = useState(false);
+  const [activeView, setActiveView] = useState<"workbench" | "rule-packages">("workbench");
 
   async function refresh() {
     const [
@@ -99,10 +124,12 @@ export default function App() {
       nextPolicy,
       nextDatasets,
       nextRulePackages,
+      nextRuleSigners,
       nextTasks,
       nextResults,
       nextExportRequests,
       nextExportFiles,
+      nextExportArchives,
       nextOperators,
       nextAudit,
     ] = await Promise.all([
@@ -110,10 +137,12 @@ export default function App() {
       getDomainPolicy(),
       getDatasets(),
       getRulePackages(),
+      getRuleSigners(),
       getTasks(),
       getResults(),
       getExportRequests(),
       getExportFiles(),
+      getExportArchives(),
       getOperators(),
       getAudit(),
     ]);
@@ -122,14 +151,20 @@ export default function App() {
       setDomainPolicy(nextPolicy);
       setDatasets(nextDatasets);
       setRulePackages(nextRulePackages);
+      setTrustedSigners(nextRuleSigners);
       setTasks(nextTasks);
       setResults(nextResults);
       setExportRequests(nextExportRequests);
       setExportFiles(nextExportFiles);
+      setExportArchives(nextExportArchives);
       setOperators(nextOperators);
       setAudit(nextAudit);
       setSelectedDatasetId((current) => current || nextDatasets[0]?.id || "");
       setSelectedRulePackageId((current) => current || nextRulePackages[0]?.id || "");
+      if (nextRuleSigners.length) {
+        setRulePackageSignerName((current) => current || nextRuleSigners[0].signer_name);
+        setRulePackageSignatureRef((current) => current || nextRuleSigners[0].signature_ref);
+      }
       setAggregateThreshold(nextPolicy.aggregate_min_threshold);
     });
   }
@@ -160,6 +195,13 @@ export default function App() {
         setNotice(error instanceof Error ? error.message : "字段映射加载失败");
       });
   }, [selectedDatasetId]);
+
+  useEffect(() => {
+    const signer = trustedSigners.find((item) => item.signer_name === rulePackageSignerName);
+    if (signer) {
+      setRulePackageSignatureRef(signer.signature_ref);
+    }
+  }, [rulePackageSignerName, trustedSigners]);
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -197,9 +239,16 @@ export default function App() {
             },
           ]
         : [];
-      const rulePackage = await createRulePackage(rulePackageName, rulePackagePurpose, rulePackageSignatureRef, rules);
+      const rulePackage = await createRulePackage(
+        rulePackageName,
+        rulePackagePurpose,
+        rulePackageSignerName,
+        rulePackageSignatureRef,
+        rulePackageSignature,
+        rules,
+      );
       await refresh();
-      setNotice(`已登记待审批规则包：${rulePackage.name}`);
+      setNotice(`已登记规则包：${rulePackage.name}，验签状态为 ${rulePackage.verification_status}`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "规则包登记失败");
     } finally {
@@ -248,6 +297,55 @@ export default function App() {
     }
   }
 
+  async function handleVerifyRulePackage(rulePackageId: string) {
+    setIsPending(true);
+    try {
+      const rulePackage = await verifyRulePackage(rulePackageId);
+      await refresh();
+      setNotice(`规则包验签结果：${rulePackage.verification_message ?? rulePackage.verification_status}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "规则包验签失败");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleBatchVerifyRulePackages() {
+    if (!selectedRulePackageIds.length) {
+      setNotice("请先选择需要批量验签的规则包");
+      return;
+    }
+    setIsPending(true);
+    try {
+      const results = await batchVerifyRulePackages(selectedRulePackageIds);
+      setBatchMessage(results);
+      await refresh();
+      setNotice(`已完成 ${results.length} 个规则包的批量验签`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "批量验签失败");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleBatchApproveRulePackages() {
+    if (!selectedRulePackageIds.length) {
+      setNotice("请先选择需要批量审批的规则包");
+      return;
+    }
+    setIsPending(true);
+    try {
+      const results = await batchApproveRulePackages(selectedRulePackageIds, approverName);
+      setBatchMessage(results);
+      await refresh();
+      setNotice(`已处理 ${results.length} 个规则包的批量审批`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "批量审批失败");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
   async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedDatasetId) {
@@ -261,6 +359,7 @@ export default function App() {
         taskName,
         [selectedDatasetId],
         selectedRulePackageId || null,
+        null,
         outputPolicy,
         outputPolicy === "aggregate_summary" ? aggregateThreshold : undefined,
         outputPolicy === "aggregate_summary" ? aggregateGroupBy : undefined,
@@ -344,6 +443,36 @@ export default function App() {
     }
   }
 
+  async function handleCreateExportArchive() {
+    if (!selectedExportFileIds.length) {
+      setNotice("请先选择需要归档封存的输出文件");
+      return;
+    }
+    setIsPending(true);
+    try {
+      const archive = await createExportArchive(selectedExportFileIds, archiveOperator, archivePurpose);
+      await refresh();
+      setNotice(`已创建归档封存：${archive.id}，共 ${archive.file_count} 个文件`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "创建归档封存失败");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleVerifyExportArchive(archiveId: string) {
+    setIsPending(true);
+    try {
+      const archive = await verifyExportArchive(archiveId);
+      await refresh();
+      setNotice(archive.verification.valid ? `归档验签通过：${archive.id}` : `归档验签失败：${archive.verification.errors.join("；")}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "归档验签失败");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
   async function handleVerifyAuditChain() {
     setIsPending(true);
     try {
@@ -357,6 +486,30 @@ export default function App() {
     }
   }
 
+  async function handleReviewAssertion(decision: "approved" | "rejected") {
+    if (!latestResult?.assertion) {
+      setNotice("当前没有待审核的结论声明");
+      return;
+    }
+
+    setIsPending(true);
+    try {
+      const result = await reviewAssertion(
+        latestResult.id,
+        assertionReviewer,
+        decision,
+        assertionFinalStatement || undefined,
+        assertionComment || undefined,
+      );
+      await refresh();
+      setNotice(`结论声明已${decision === "approved" ? "审核通过" : "驳回"}：${result.assertion?.status ?? "unknown"}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "结论声明审核失败");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
   const latestDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) ?? datasets[0];
   const fieldNames = latestDataset?.fields.map((field) => field.name) ?? [];
   const approvedRulePackages = rulePackages.filter((rulePackage) => rulePackage.status === "approved");
@@ -364,12 +517,14 @@ export default function App() {
 
   return (
     <main className="shell">
+      {false ? (
+        <>
       <section className="hero">
         <div className="hero__copy">
           <p className="eyebrow">Domain-Local Query Console</p>
           <h1>本域数据不出域联查计算系统</h1>
           <p className="hero__lead">
-            Stage 6 已补齐安全输出包受控落盘与审计链校验：审批后的回执、结论声明、聚合统计只能写入本域 exports 目录，并可校验审计链是否被篡改。
+            Stage 8 已补齐输出文件归档封存与验签报告、规则包批量管理，并将规则包验签升级为正式公私钥验签。
           </p>
         </div>
         <div className="hero__status">
@@ -407,10 +562,38 @@ export default function App() {
         ))}
       </section>
 
+        </>
+      ) : null}
       <div className="notice" role="status">
         {isPending ? "正在处理本域任务..." : notice}
       </div>
 
+      <div className="view-switch">
+        <button
+          className={activeView === "workbench" ? "view-switch__button view-switch__button--active" : "view-switch__button"}
+          type="button"
+          onClick={() => setActiveView("workbench")}
+        >
+          本域工作台
+        </button>
+        <button
+          className={activeView === "rule-packages" ? "view-switch__button view-switch__button--active" : "view-switch__button"}
+          type="button"
+          onClick={() => setActiveView("rule-packages")}
+        >
+          规则包中心
+        </button>
+      </div>
+
+      {activeView === "rule-packages" ? (
+        <RulePackageCenter
+          packages={rulePackages}
+          signers={trustedSigners}
+          isPendingGlobal={isPending}
+          onNotice={setNotice}
+          onRefresh={refresh}
+        />
+      ) : (
       <section className="workbench">
         <article className="panel panel--upload">
           <div className="panel__heading">
@@ -444,8 +627,22 @@ export default function App() {
               <input value={rulePackagePurpose} onChange={(event) => setRulePackagePurpose(event.target.value)} />
             </label>
             <label>
+              签名人
+              <select value={rulePackageSignerName} onChange={(event) => setRulePackageSignerName(event.target.value)}>
+                {trustedSigners.map((signer) => (
+                  <option key={signer.signer_name} value={signer.signer_name}>
+                    {signer.signer_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
               规则包签名引用
               <input value={rulePackageSignatureRef} onChange={(event) => setRulePackageSignatureRef(event.target.value)} />
+            </label>
+            <label>
+              规则包签名值
+              <input value={rulePackageSignature} onChange={(event) => setRulePackageSignature(event.target.value)} />
             </label>
             <label>
               规则字段
@@ -472,21 +669,60 @@ export default function App() {
               登记待审批规则包
             </button>
           </form>
+          <p className="hint">先用 `scripts/bootstrap-stage8-keys.ps1` 生成密钥，再用 `scripts/generate-rule-package-signature.ps1` 本地生成签名。</p>
           <label>
             审批人
             <input value={approverName} onChange={(event) => setApproverName(event.target.value)} />
           </label>
+          <div className="task-row">
+            <button disabled={isPending} type="button" onClick={handleBatchVerifyRulePackages}>
+              批量验签
+            </button>
+            <button disabled={isPending} type="button" onClick={handleBatchApproveRulePackages}>
+              批量审批
+            </button>
+          </div>
+          {batchMessage?.length ? (
+            <div className="result-block">
+              <strong>批量处理结果</strong>
+              {batchMessage.map((item) => (
+                <small key={item.package_id}>
+                  {item.name} · {item.status} · {item.message}
+                </small>
+              ))}
+            </div>
+          ) : null}
           <div className="task-list">
             {rulePackages.slice(0, 4).map((rulePackage) => (
               <div className="task-row" key={rulePackage.id}>
+                <label>
+                  <input
+                    checked={selectedRulePackageIds.includes(rulePackage.id)}
+                    type="checkbox"
+                    onChange={(event) =>
+                      setSelectedRulePackageIds((current) =>
+                        event.target.checked ? [...current, rulePackage.id] : current.filter((item) => item !== rulePackage.id),
+                      )
+                    }
+                  />
+                  选择
+                </label>
                 <strong>{rulePackage.name}</strong>
                 <span>{rulePackage.status}</span>
-                <small>签名：{rulePackage.signature_ref}</small>
+                <small>
+                  验签：{rulePackage.verification_status} / {rulePackage.signature_ref}
+                </small>
                 <small>规则数：{rulePackage.rules_count}</small>
+                <small>{rulePackage.verification_message ?? "待验签"}</small>
                 {rulePackage.status !== "approved" ? (
-                  <button disabled={isPending} type="button" onClick={() => handleApproveRulePackage(rulePackage.id)}>
-                    审批通过
-                  </button>
+                  <>
+                    <button disabled={isPending} type="button" onClick={() => handleVerifyRulePackage(rulePackage.id)}>
+                      重新验签
+                    </button>
+                    <button disabled={isPending} type="button" onClick={() => handleApproveRulePackage(rulePackage.id)}>
+                      审批通过
+                    </button>
+                  </>
                 ) : (
                   <small>审批人：{rulePackage.approved_by ?? "已审批"}</small>
                 )}
@@ -758,7 +994,10 @@ export default function App() {
               {latestResult.assertion ? (
                 <div className="result-block">
                   <strong>结论声明</strong>
-                  <small>{String(latestResult.assertion.statement ?? "待审核")}</small>
+                  <small>{latestResult.assertion.statement}</small>
+                  <small>状态：{latestResult.assertion.status}</small>
+                  {latestResult.assertion.reviewer_name ? <small>审核人：{latestResult.assertion.reviewer_name}</small> : null}
+                  {latestResult.assertion.review_comment ? <small>审核意见：{latestResult.assertion.review_comment}</small> : null}
                 </div>
               ) : null}
               <div className="result-block">
@@ -767,6 +1006,29 @@ export default function App() {
                   <small key={note}>{note}</small>
                 ))}
               </div>
+              {latestResult.assertion?.status === "pending_review" ? (
+                <div className="result-block">
+                  <strong>结论声明审核</strong>
+                  <label>
+                    审核人
+                    <input value={assertionReviewer} onChange={(event) => setAssertionReviewer(event.target.value)} />
+                  </label>
+                  <label>
+                    正式结论
+                    <input value={assertionFinalStatement} onChange={(event) => setAssertionFinalStatement(event.target.value)} />
+                  </label>
+                  <label>
+                    审核意见
+                    <input value={assertionComment} onChange={(event) => setAssertionComment(event.target.value)} />
+                  </label>
+                  <button disabled={isPending} type="button" onClick={() => handleReviewAssertion("approved")}>
+                    审核通过
+                  </button>
+                  <button disabled={isPending} type="button" onClick={() => handleReviewAssertion("rejected")}>
+                    驳回结论
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : (
             <p className="empty">暂无执行结果。</p>
@@ -854,15 +1116,51 @@ export default function App() {
           {exportFiles.length ? (
             <div className="result-block">
               <strong>本域输出文件</strong>
+              <label>
+                归档员
+                <input value={archiveOperator} onChange={(event) => setArchiveOperator(event.target.value)} />
+              </label>
+              <label>
+                归档用途
+                <input value={archivePurpose} onChange={(event) => setArchivePurpose(event.target.value)} />
+              </label>
+              <button disabled={isPending} type="button" onClick={handleCreateExportArchive}>
+                归档封存
+              </button>
               {exportFiles.slice(-4).reverse().map((file) => (
-                <small key={file.id}>
+                <label key={file.id}>
+                  <input
+                    checked={selectedExportFileIds.includes(file.id)}
+                    type="checkbox"
+                    onChange={(event) =>
+                      setSelectedExportFileIds((current) =>
+                        event.target.checked ? [...current, file.id] : current.filter((item) => item !== file.id),
+                      )
+                    }
+                  />
                   {file.file_name} · {file.byte_size} bytes · {file.sha256.slice(0, 12)}
-                </small>
+                </label>
+              ))}
+            </div>
+          ) : null}
+          {exportArchives.length ? (
+            <div className="result-block">
+              <strong>归档封存与验签报告</strong>
+              {exportArchives.slice(-4).reverse().map((archive) => (
+                <div key={archive.id}>
+                  <small>
+                    {archive.id} · {archive.file_count} 个文件 · 验签 {archive.verification.valid ? "通过" : "失败"}
+                  </small>
+                  <button disabled={isPending} type="button" onClick={() => handleVerifyExportArchive(archive.id)}>
+                    重新验签报告
+                  </button>
+                </div>
               ))}
             </div>
           ) : null}
         </article>
       </section>
+      )}
     </main>
   );
 }
