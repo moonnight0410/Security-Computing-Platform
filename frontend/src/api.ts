@@ -10,9 +10,14 @@ import type {
   ExportPackage,
   ExportRequest,
   OperatorInfo,
+  GovernanceDashboard,
   RulePackageBatchResult,
+  RulePackageRevisionDiff,
   RulePackage,
   RulePackageRevision,
+  RuleSnippet,
+  RuleTemplate,
+  RulePackageUsageReport,
   Task,
   TaskResult,
   TrustedSignerInfo,
@@ -83,6 +88,10 @@ export function getResults(): Promise<TaskResult[]> {
 
 export function getOperators(): Promise<OperatorInfo[]> {
   return request<OperatorInfo[]>("/api/operators");
+}
+
+export function getGovernanceDashboard(): Promise<GovernanceDashboard> {
+  return request<GovernanceDashboard>("/api/governance/dashboard");
 }
 
 export function getExportRequests(): Promise<ExportRequest[]> {
@@ -167,6 +176,44 @@ export function getRulePackages(): Promise<RulePackage[]> {
 
 export function getRuleSigners(): Promise<TrustedSignerInfo[]> {
   return request<TrustedSignerInfo[]>("/api/rule-signers");
+}
+
+export function getRuleTemplates(): Promise<RuleTemplate[]> {
+  return request<RuleTemplate[]>("/api/rule-templates");
+}
+
+export function createRuleTemplate(payload: {
+  name: string;
+  description?: string;
+  rules: Array<Record<string, unknown>>;
+  created_by: string;
+}): Promise<RuleTemplate> {
+  return request<RuleTemplate>("/api/rule-templates", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getRuleSnippets(): Promise<RuleSnippet[]> {
+  return request<RuleSnippet[]>("/api/rule-snippets");
+}
+
+export function createRuleSnippet(payload: {
+  name: string;
+  description?: string;
+  rule: Record<string, unknown>;
+  created_by: string;
+}): Promise<RuleSnippet> {
+  return request<RuleSnippet>("/api/rule-snippets", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
 }
 
 export function createRulePackage(
@@ -304,6 +351,22 @@ export function createRulePackageDraft(payload: {
 
 export function getRulePackageRevisions(rulePackageId: string): Promise<RulePackageRevision[]> {
   return request<RulePackageRevision[]>(`/api/rule-package-center/packages/${rulePackageId}/revisions`);
+}
+
+export function getRulePackageRevisionDiff(
+  rulePackageId: string,
+  fromRevisionId: string,
+  toRevisionId: string,
+): Promise<RulePackageRevisionDiff> {
+  const search = new URLSearchParams({
+    from_revision_id: fromRevisionId,
+    to_revision_id: toRevisionId,
+  }).toString();
+  return request<RulePackageRevisionDiff>(`/api/rule-package-center/packages/${rulePackageId}/revision-diff?${search}`);
+}
+
+export function getRulePackageReferences(rulePackageId: string): Promise<RulePackageUsageReport> {
+  return request<RulePackageUsageReport>(`/api/rule-package-center/packages/${rulePackageId}/references`);
 }
 
 export function beginRulePackageEdit(rulePackageId: string, editorName: string): Promise<RulePackageRevision> {

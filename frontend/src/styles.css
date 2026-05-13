@@ -1,17 +1,17 @@
 :root {
-  color: #17211d;
-  background: #efe7d5;
+  color: #17324f;
+  background: #f3f8ff;
   font-family: "Noto Serif SC", "Songti SC", Georgia, serif;
   font-synthesis: none;
   text-rendering: geometricPrecision;
-  --ink: #17211d;
-  --paper: #f6f0e3;
-  --paper-deep: #e2d2b4;
-  --green: #214c3f;
-  --rust: #9b3f22;
-  --sand: #c49a54;
-  --line: rgba(23, 33, 29, 0.18);
-  --shadow: 0 28px 80px rgba(51, 43, 31, 0.18);
+  --ink: #17324f;
+  --paper: #ffffff;
+  --paper-deep: #dbeafe;
+  --green: #0f4c81;
+  --rust: #2a6eb9;
+  --sand: #7db5f0;
+  --line: rgba(42, 110, 185, 0.18);
+  --shadow: 0 28px 80px rgba(17, 65, 118, 0.14);
 }
 
 * {
@@ -22,9 +22,9 @@ body {
   min-width: 320px;
   margin: 0;
   background:
-    radial-gradient(circle at 12% 8%, rgba(196, 154, 84, 0.34), transparent 28rem),
-    radial-gradient(circle at 92% 18%, rgba(33, 76, 63, 0.2), transparent 22rem),
-    linear-gradient(135deg, #efe7d5 0%, #f8f3e8 50%, #dccaaa 100%);
+    radial-gradient(circle at 14% 6%, rgba(125, 181, 240, 0.38), transparent 24rem),
+    radial-gradient(circle at 88% 16%, rgba(42, 110, 185, 0.16), transparent 22rem),
+    linear-gradient(145deg, #f5f9ff 0%, #eef6ff 48%, #dceeff 100%);
 }
 
 button,
@@ -37,16 +37,16 @@ button {
   border: 0;
   border-radius: 999px;
   padding: 0.8rem 1.2rem;
-  color: #fffaf0;
+  color: #f7fbff;
   background: var(--green);
   cursor: pointer;
-  box-shadow: 0 12px 24px rgba(33, 76, 63, 0.2);
+  box-shadow: 0 14px 28px rgba(15, 76, 129, 0.2);
   transition: transform 180ms ease, box-shadow 180ms ease;
 }
 
 button:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 18px 32px rgba(33, 76, 63, 0.24);
+  box-shadow: 0 18px 32px rgba(15, 76, 129, 0.24);
 }
 
 button:disabled {
@@ -61,7 +61,7 @@ select {
   border-radius: 18px;
   padding: 0.8rem 1rem;
   color: var(--ink);
-  background: rgba(255, 250, 240, 0.78);
+  background: rgba(255, 255, 255, 0.92);
 }
 
 label {
@@ -87,7 +87,7 @@ label {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 36px;
-  background: rgba(246, 240, 227, 0.78);
+  background: rgba(255, 255, 255, 0.8);
   box-shadow: var(--shadow);
 }
 
@@ -96,7 +96,7 @@ label {
   inset: auto -12% -58% 38%;
   width: 520px;
   height: 520px;
-  border: 1px solid rgba(155, 63, 34, 0.28);
+  border: 1px solid rgba(42, 110, 185, 0.22);
   border-radius: 50%;
   content: "";
 }
@@ -112,7 +112,7 @@ label {
 .hero__lead {
   max-width: 700px;
   margin: 24px 0 0;
-  color: rgba(23, 33, 29, 0.74);
+  color: rgba(23, 50, 79, 0.72);
   font-size: 1.08rem;
   line-height: 1.8;
 }
@@ -124,14 +124,14 @@ label {
   min-height: 220px;
   padding: 24px;
   border-radius: 28px;
-  color: #fff7e8;
+  color: #f3f8ff;
   background:
-    linear-gradient(160deg, rgba(23, 33, 29, 0.9), rgba(33, 76, 63, 0.9)),
+    linear-gradient(160deg, rgba(14, 54, 94, 0.95), rgba(30, 91, 155, 0.88)),
     var(--green);
 }
 
 .hero__status small {
-  color: rgba(255, 247, 232, 0.7);
+  color: rgba(243, 248, 255, 0.78);
   line-height: 1.6;
   word-break: break-all;
 }
@@ -165,7 +165,7 @@ label {
   padding: 20px;
   border: 1px solid var(--line);
   border-radius: 26px;
-  background: rgba(246, 240, 227, 0.72);
+  background: rgba(255, 255, 255, 0.76);
 }
 
 .stage-card span {
@@ -201,10 +201,10 @@ label {
 .notice {
   margin: 0 0 20px;
   padding: 16px 20px;
-  border: 1px dashed rgba(155, 63, 34, 0.42);
+  border: 1px dashed rgba(42, 110, 185, 0.42);
   border-radius: 22px;
-  color: #5e2a1b;
-  background: rgba(255, 250, 240, 0.62);
+  color: #124877;
+  background: rgba(255, 255, 255, 0.8);
 }
 
 .view-switch {
@@ -214,7 +214,7 @@ label {
 }
 
 .view-switch__button {
-  background: rgba(255, 250, 240, 0.84);
+  background: rgba(255, 255, 255, 0.88);
   color: var(--ink);
   border: 1px solid var(--line);
   box-shadow: none;
@@ -222,7 +222,7 @@ label {
 
 .view-switch__button--active {
   background: var(--green);
-  color: #fffaf0;
+  color: #f7fbff;
 }
 
 .policy-banner {
@@ -231,9 +231,9 @@ label {
   gap: 18px;
   margin: 18px 0 0;
   padding: 20px 22px;
-  border: 1px solid rgba(155, 63, 34, 0.28);
+  border: 1px solid rgba(42, 110, 185, 0.2);
   border-radius: 28px;
-  background: rgba(255, 245, 230, 0.76);
+  background: rgba(248, 252, 255, 0.85);
 }
 
 .policy-banner strong {
@@ -253,8 +253,8 @@ label {
 .policy-tags span {
   border-radius: 999px;
   padding: 0.5rem 0.8rem;
-  color: #5e2a1b;
-  background: rgba(155, 63, 34, 0.1);
+  color: #1f5a97;
+  background: rgba(42, 110, 185, 0.1);
   font-size: 0.84rem;
 }
 
@@ -269,6 +269,10 @@ label {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
+}
+
+.governance-board {
+  grid-column: 1 / -1;
 }
 
 .rule-center {
@@ -288,20 +292,20 @@ label {
   padding: 24px;
   border: 1px solid var(--line);
   border-radius: 30px;
-  background: rgba(246, 240, 227, 0.82);
-  box-shadow: 0 18px 50px rgba(51, 43, 31, 0.1);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 18px 50px rgba(17, 65, 118, 0.1);
 }
 
 .panel--upload {
   background:
-    linear-gradient(135deg, rgba(196, 154, 84, 0.16), transparent),
-    rgba(246, 240, 227, 0.9);
+    linear-gradient(135deg, rgba(125, 181, 240, 0.14), transparent),
+    rgba(255, 255, 255, 0.94);
 }
 
 .panel--audit {
   background:
-    linear-gradient(135deg, rgba(33, 76, 63, 0.12), transparent),
-    rgba(246, 240, 227, 0.9);
+    linear-gradient(135deg, rgba(42, 110, 185, 0.12), transparent),
+    rgba(255, 255, 255, 0.94);
 }
 
 .panel__heading {
@@ -336,7 +340,7 @@ label {
   margin-bottom: 18px;
   padding: 16px;
   border-radius: 20px;
-  background: rgba(255, 250, 240, 0.78);
+  background: rgba(244, 249, 255, 0.92);
 }
 
 .dataset-card span,
@@ -361,9 +365,9 @@ label {
   gap: 8px 14px;
   align-items: center;
   padding: 12px 14px;
-  border: 1px solid rgba(23, 33, 29, 0.1);
+  border: 1px solid rgba(42, 110, 185, 0.1);
   border-radius: 16px;
-  background: rgba(255, 250, 240, 0.58);
+  background: rgba(248, 252, 255, 0.86);
 }
 
 .result-grid {
@@ -377,9 +381,9 @@ label {
   display: grid;
   gap: 8px;
   padding: 14px;
-  border: 1px solid rgba(23, 33, 29, 0.1);
+  border: 1px solid rgba(42, 110, 185, 0.12);
   border-radius: 18px;
-  background: rgba(255, 250, 240, 0.62);
+  background: rgba(248, 252, 255, 0.9);
 }
 
 .metric span,
@@ -394,6 +398,24 @@ label {
 
 .result-block {
   grid-column: 1 / -1;
+}
+
+.governance-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.diff-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .rule-editor-row {
@@ -419,9 +441,79 @@ label {
 .task-row span {
   border-radius: 999px;
   padding: 0.24rem 0.62rem;
-  color: #fff7e8;
+  color: #f7fbff;
   background: var(--rust);
   font-size: 0.78rem;
+}
+
+.governance-board__cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.governance-board__streams {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.asset-row {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(42, 110, 185, 0.12);
+  border-radius: 14px;
+  background: rgba(245, 250, 255, 0.88);
+}
+
+.rule-tree {
+  display: grid;
+  gap: 12px;
+}
+
+.rule-tree-group {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(42, 110, 185, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.rule-tree-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rule-tree-group__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rule-tree-group__actions select,
+.rule-tree-group__actions button {
+  width: auto;
+}
+
+.rule-tree-group__body {
+  display: grid;
+  gap: 10px;
+}
+
+.rule-tree-leaf {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(240, 247, 255, 0.88);
 }
 
 @media (max-width: 860px) {
@@ -434,6 +526,12 @@ label {
 
   .stage-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .governance-board__cards,
+  .governance-board__streams,
+  .rule-tree-leaf {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -450,6 +548,11 @@ label {
   }
 
   .stage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .diff-toolbar,
+  .metric-strip {
     grid-template-columns: 1fr;
   }
 }

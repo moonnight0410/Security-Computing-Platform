@@ -1,17 +1,25 @@
 import hashlib
 import json
 from copy import deepcopy
+from typing import Any
 from uuid import uuid4
 
 from app.models.schemas import (
     RulePackage,
     RulePackageApprove,
     RulePackageCreate,
+    RulePackageDiffFieldChange,
+    RulePackageDiffRuleChange,
     RulePackageDeprecate,
     RulePackageDraftSave,
     RulePackageRevision,
+    RulePackageRevisionDiff,
+    RulePackageRevisionReferenceSummary,
+    RulePackageTaskReference,
+    RulePackageUsageReport,
 )
 from app.services.audit import utc_now
+from app.services.rule_logic import comparable_rule_value, count_rule_items, flatten_rule_descriptors
 from app.services.rule_signatures import apply_rule_package_verification
 
 
@@ -53,7 +61,7 @@ def create_rule_package_entities(payload: RulePackageCreate) -> tuple[RulePackag
         signature_ref=payload.signature_ref,
         signature=payload.signature,
         rules=deepcopy(payload.rules),
-        rules_count=len(payload.rules),
+        rules_count=count_rule_items(payload.rules),
         status="draft",
         verification_status="not_signed",
         notes=payload.notes,
@@ -74,7 +82,7 @@ def create_rule_package_entities(payload: RulePackageCreate) -> tuple[RulePackag
         signature_ref=payload.signature_ref,
         signature=payload.signature,
         rules=deepcopy(payload.rules),
-        rules_count=len(payload.rules),
+        rules_count=count_rule_items(payload.rules),
         status="draft",
         verification_status="not_signed",
         created_at=now,
@@ -204,7 +212,7 @@ def save_rule_package_revision(
         signature_ref=payload.signature_ref,
         signature=payload.signature,
         rules=deepcopy(payload.rules),
-        rules_count=len(payload.rules),
+        rules_count=count_rule_items(payload.rules),
         status="draft",
         verification_status="not_signed",
         verification_message="草稿已保存，待重新签名或提交验签",
@@ -257,3 +265,173 @@ def package_can_be_deleted(package: RulePackage, tasks: list[dict[str, object]])
     if referenced:
         return False, "已被任务引用的规则包不可删除"
     return True, None
+
+
+def comparable_revision_fields(revision: RulePackageRevision) -> dict[str, Any]:
+    return {
+        "name": revision.name,
+        "version": revision.version,
+        "purpose": revision.purpose,
+        "signer_name": revision.signer_name,
+        "signature_ref": revision.signature_ref,
+        "notes": revision.notes,
+        "change_summary": revision.change_summary,
+        "status": revision.status,
+        "verification_status": revision.verification_status,
+        "rules_count": revision.rules_count,
+        "signature_outdated": revision.signature_outdated,
+    }
+
+
+def compare_rule_package_revisions(
+    package: RulePackage,
+    from_revision: RulePackageRevision,
+    to_revision: RulePackageRevision,
+) -> RulePackageRevisionDiff:
+    field_changes: list[RulePackageDiffFieldChange] = []
+    from_fields = comparable_revision_fields(from_revision)
+    to_fields = comparable_revision_fields(to_revision)
+    for field_name in from_fields:
+        if from_fields[field_name] != to_fields[field_name]:
+            field_changes.append(
+                RulePackageDiffFieldChange(
+                    field=field_name,
+                    before=from_fields[field_name],
+                    after=to_fields[field_name],
+                )
+            )
+
+    from_rules = {item["path"]: item for item in flatten_rule_descriptors(from_revision.rules)}
+    to_rules = {item["path"]: item for item in flatten_rule_descriptors(to_revision.rules)}
+    rule_changes: list[RulePackageDiffRuleChange] = []
+
+    for key in sorted(set(from_rules) | set(to_rules)):
+        before_rule = from_rules.get(key)
+        after_rule = to_rules.get(key)
+        if before_rule is None and after_rule is not None:
+            rule_changes.append(
+                RulePackageDiffRuleChange(
+                    change_type="added",
+                    rule_key=key,
+                    field=str(after_rule.get("field", after_rule.get("node_type", ""))),
+                    operator=str(after_rule.get("operator", after_rule.get("logic", ""))),
+                    after_value=comparable_rule_value(after_rule.get("value") if after_rule.get("node_type") == "rule" else after_rule.get("logic")),
+                )
+            )
+            continue
+        if before_rule is not None and after_rule is None:
+            rule_changes.append(
+                RulePackageDiffRuleChange(
+                    change_type="removed",
+                    rule_key=key,
+                    field=str(before_rule.get("field", before_rule.get("node_type", ""))),
+                    operator=str(before_rule.get("operator", before_rule.get("logic", ""))),
+                    before_value=comparable_rule_value(before_rule.get("value") if before_rule.get("node_type") == "rule" else before_rule.get("logic")),
+                )
+            )
+            continue
+        if before_rule is None or after_rule is None:
+            continue
+        comparable_before = comparable_rule_value(before_rule)
+        comparable_after = comparable_rule_value(after_rule)
+        if comparable_before != comparable_after:
+            rule_changes.append(
+                RulePackageDiffRuleChange(
+                    change_type="modified",
+                    rule_key=key,
+                    field=str(after_rule.get("field", after_rule.get("node_type", ""))),
+                    operator=str(after_rule.get("operator", after_rule.get("logic", ""))),
+                    before_value=comparable_before,
+                    after_value=comparable_after,
+                )
+            )
+
+    based_on_match = to_revision.based_on_revision_id == from_revision.id
+    return RulePackageRevisionDiff(
+        package_id=package.id,
+        package_name=package.name,
+        from_revision_id=from_revision.id,
+        from_revision_no=from_revision.revision_no,
+        to_revision_id=to_revision.id,
+        to_revision_no=to_revision.revision_no,
+        based_on_match=based_on_match,
+        field_changes=field_changes,
+        rule_changes=rule_changes,
+        summary={
+            "field_change_count": len(field_changes),
+            "rule_change_count": len(rule_changes),
+            "added_rule_count": sum(1 for item in rule_changes if item.change_type == "added"),
+            "removed_rule_count": sum(1 for item in rule_changes if item.change_type == "removed"),
+            "modified_rule_count": sum(1 for item in rule_changes if item.change_type == "modified"),
+            "based_on_match": based_on_match,
+            "from_rules_count": from_revision.rules_count,
+            "to_rules_count": to_revision.rules_count,
+        },
+    )
+
+
+def build_rule_package_usage_report(
+    package: RulePackage,
+    revisions: list[RulePackageRevision],
+    tasks: list[dict[str, object]],
+) -> RulePackageUsageReport:
+    package_revisions = [item for item in revisions if item.rule_package_id == package.id and item.status != "deleted"]
+    revision_map = {item.id: item for item in package_revisions}
+    revision_counts = {item.id: 0 for item in package_revisions}
+    matched_tasks: list[RulePackageTaskReference] = []
+
+    for task in tasks:
+        task_revision_id = str(task.get("rule_package_revision_id") or "") or None
+        task_package_id = str(task.get("rule_package_id") or "") or None
+        if task_package_id != package.id and task_revision_id not in revision_map:
+            continue
+
+        revision = revision_map.get(task_revision_id or "")
+        if revision is not None:
+            revision_counts[revision.id] += 1
+
+        matched_tasks.append(
+            RulePackageTaskReference(
+                task_id=str(task.get("id") or ""),
+                task_name=str(task.get("name") or ""),
+                task_status=str(task.get("status") or ""),
+                created_at=str(task.get("created_at") or ""),
+                output_policy=str(task.get("output_policy") or "local_only"),
+                referenced_revision_id=revision.id if revision is not None else None,
+                referenced_revision_no=revision.revision_no if revision is not None else None,
+                referenced_revision_status=revision.status if revision is not None else None,
+                is_current_revision=revision is not None and revision.id == package.current_revision_id,
+            )
+        )
+
+    matched_tasks.sort(key=lambda item: (item.created_at, item.task_id), reverse=True)
+
+    revision_summaries = sorted(
+        [
+            RulePackageRevisionReferenceSummary(
+                revision_id=item.id,
+                revision_no=item.revision_no,
+                revision_status=item.status,
+                is_current_revision=item.id == package.current_revision_id,
+                task_count=revision_counts.get(item.id, 0),
+            )
+            for item in package_revisions
+        ],
+        key=lambda item: item.revision_no,
+    )
+
+    return RulePackageUsageReport(
+        package_id=package.id,
+        package_name=package.name,
+        current_revision_id=package.current_revision_id,
+        current_revision_no=package.current_revision_no,
+        total_task_count=len(matched_tasks),
+        current_revision_task_count=sum(1 for item in matched_tasks if item.is_current_revision),
+        historical_revision_task_count=sum(
+            1
+            for item in matched_tasks
+            if item.referenced_revision_id is not None and not item.is_current_revision
+        ),
+        revision_summaries=revision_summaries,
+        tasks=matched_tasks,
+    )

@@ -4,11 +4,14 @@ from copy import deepcopy
 from typing import Any
 
 from app.core.config import DB_FILE, STATE_FILE, ensure_workspace
+from app.services.rule_logic import count_rule_items
 
 
 DEFAULT_STATE: dict[str, list[dict[str, Any]]] = {
     "datasets": [],
     "field_mappings": [],
+    "rule_templates": [],
+    "rule_snippets": [],
     "rule_packages": [],
     "rule_package_revisions": [],
     "tasks": [],
@@ -61,7 +64,7 @@ def normalize_rule_packages(state: dict[str, list[dict[str, Any]]]) -> None:
                 "signature_ref": package.get("signature_ref", ""),
                 "signature": package.get("signature", ""),
                 "rules": package.get("rules", []),
-                "rules_count": package.get("rules_count", len(package.get("rules", []))),
+                "rules_count": package.get("rules_count", count_rule_items(package.get("rules", []))),
                 "status": revision_status,
                 "verification_status": package.get("verification_status", "legacy_unverified"),
                 "verification_message": package.get("verification_message"),
@@ -86,7 +89,7 @@ def normalize_rule_packages(state: dict[str, list[dict[str, Any]]]) -> None:
         package.setdefault("current_revision_id", current_revision.get("id"))
         package.setdefault("current_revision_no", int(current_revision.get("revision_no", 1)))
         package["rules"] = current_revision.get("rules", package.get("rules", []))
-        package["rules_count"] = current_revision.get("rules_count", len(package["rules"]))
+        package["rules_count"] = current_revision.get("rules_count", count_rule_items(package["rules"]))
         package["signer_name"] = current_revision.get("signer_name", package.get("signer_name", ""))
         package["signature_ref"] = current_revision.get("signature_ref", package.get("signature_ref", ""))
         package["signature"] = current_revision.get("signature", package.get("signature", ""))

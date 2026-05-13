@@ -29,6 +29,42 @@ export type FieldMapping = {
   updated_at: string;
 };
 
+export type RuleLeafNode = {
+  type: "rule";
+  field: string;
+  operator: "eq" | "neq" | "exists" | "not_empty" | "gte" | "lte" | "in";
+  value: unknown;
+};
+
+export type RuleGroupNode = {
+  type: "group";
+  logic: "and" | "or";
+  children: RuleNode[];
+};
+
+export type RuleNode = RuleLeafNode | RuleGroupNode;
+
+export type RuleTemplate = {
+  id: string;
+  name: string;
+  description?: string | null;
+  rules: Array<Record<string, unknown>>;
+  rules_count: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RuleSnippet = {
+  id: string;
+  name: string;
+  description?: string | null;
+  rule: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Task = {
   id: string;
   name: string;
@@ -121,6 +157,66 @@ export type RulePackageRevision = {
   based_on_revision_id?: string | null;
   content_hash: string;
   created_at: string;
+};
+
+export type RulePackageDiffFieldChange = {
+  field: string;
+  before?: unknown | null;
+  after?: unknown | null;
+};
+
+export type RulePackageDiffRuleChange = {
+  change_type: "added" | "removed" | "modified";
+  rule_key: string;
+  field: string;
+  operator: string;
+  before_value?: unknown | null;
+  after_value?: unknown | null;
+};
+
+export type RulePackageRevisionDiff = {
+  package_id: string;
+  package_name: string;
+  from_revision_id: string;
+  from_revision_no: number;
+  to_revision_id: string;
+  to_revision_no: number;
+  based_on_match: boolean;
+  field_changes: RulePackageDiffFieldChange[];
+  rule_changes: RulePackageDiffRuleChange[];
+  summary: Record<string, unknown>;
+};
+
+export type RulePackageTaskReference = {
+  task_id: string;
+  task_name: string;
+  task_status: string;
+  created_at: string;
+  output_policy: string;
+  referenced_revision_id?: string | null;
+  referenced_revision_no?: number | null;
+  referenced_revision_status?: RulePackage["status"] | null;
+  is_current_revision: boolean;
+};
+
+export type RulePackageRevisionReferenceSummary = {
+  revision_id: string;
+  revision_no: number;
+  revision_status: RulePackage["status"];
+  is_current_revision: boolean;
+  task_count: number;
+};
+
+export type RulePackageUsageReport = {
+  package_id: string;
+  package_name: string;
+  current_revision_id?: string | null;
+  current_revision_no?: number | null;
+  total_task_count: number;
+  current_revision_task_count: number;
+  historical_revision_task_count: number;
+  revision_summaries: RulePackageRevisionReferenceSummary[];
+  tasks: RulePackageTaskReference[];
 };
 
 export type RulePackageBatchResult = {
@@ -245,4 +341,16 @@ export type DomainPolicy = {
   rule_package_import_policy: string;
   signature_required: boolean;
   default_output_policy: "local_only";
+};
+
+export type GovernanceDashboard = {
+  task_counts: Record<string, number>;
+  output_counts: Record<string, number>;
+  rule_package_counts: Record<string, number>;
+  pending_assertion_count: number;
+  audit_total_entries: number;
+  recent_tasks: Task[];
+  recent_export_requests: ExportRequest[];
+  recent_export_files: ExportFile[];
+  recent_archives: ExportArchive[];
 };

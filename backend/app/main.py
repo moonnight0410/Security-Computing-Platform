@@ -21,12 +21,19 @@ from app.models.schemas import (
     ExportRequestCreate,
     FieldMapping,
     FieldMappingCreate,
+    GovernanceDashboard,
     HealthResponse,
     OperatorInfo,
     RulePackage,
     RulePackageApprove,
     RulePackageBatchAction,
     RulePackageBatchResult,
+    RulePackageRevisionDiff,
+    RuleSnippet,
+    RuleSnippetCreate,
+    RuleTemplate,
+    RuleTemplateCreate,
+    RulePackageUsageReport,
     RulePackageCreate,
     RulePackageDeprecate,
     RulePackageDraftSave,
@@ -42,14 +49,18 @@ from app.services.audit import utc_now, verify_audit_chain, write_audit
 from app.services.app_logging import configure_logging, get_logger
 from app.services.execution import execute_local_task
 from app.services.exports import approve_export_request, build_export_package, create_export_request, persist_export_package
+from app.services.governance_dashboard import build_governance_dashboard
 from app.services.operators import list_operators
 from app.services.profiling import profile_csv
+from app.services.rule_assets import create_rule_snippet, create_rule_template
 from app.services.rule_packages import (
     approve_revision,
+    build_rule_package_usage_report,
     create_edit_revision,
     create_rule_package_entities,
     deprecate_package,
     editable_revision_for_package,
+    compare_rule_package_revisions,
     latest_revision,
     materialize_package_from_revision,
     package_can_be_deleted,
@@ -69,8 +80,8 @@ ALLOWED_UPLOAD_SUFFIXES = {".csv", ".xlsx", ".xls"}
 
 app = FastAPI(
     title="政府部门联查数据计算单机系统",
-    version="0.9.0-stage9-domain-local",
-    description="Stage 9 API with rule package center, revision snapshots, and edit governance.",
+    version="0.11.0-stage11-domain-local",
+    description="Stage 11 API with reusable rule assets, nested AND/OR composition, and governance dashboard.",
 )
 
 app.add_middleware(
@@ -268,6 +279,44 @@ def save_field_mapping(dataset_id: str, payload: FieldMappingCreate) -> FieldMap
         },
     )
     return mapping
+
+
+@app.get("/api/rule-templates", response_model=list[RuleTemplate])
+def list_rule_templates() -> list[RuleTemplate]:
+    return [RuleTemplate(**item) for item in load_state().get("rule_templates", [])]
+
+
+@app.post("/api/rule-templates", response_model=RuleTemplate)
+def create_rule_template_endpoint(payload: RuleTemplateCreate) -> RuleTemplate:
+    template = create_rule_template(payload)
+    add_record("rule_templates", template.model_dump())
+    write_audit(
+        action="rule_template.create",
+        object_type="rule_template",
+        object_id=template.id,
+        summary=f"创建规则模板：{template.name}",
+        metadata={"created_by": template.created_by, "rules_count": template.rules_count},
+    )
+    return template
+
+
+@app.get("/api/rule-snippets", response_model=list[RuleSnippet])
+def list_rule_snippets() -> list[RuleSnippet]:
+    return [RuleSnippet(**item) for item in load_state().get("rule_snippets", [])]
+
+
+@app.post("/api/rule-snippets", response_model=RuleSnippet)
+def create_rule_snippet_endpoint(payload: RuleSnippetCreate) -> RuleSnippet:
+    snippet = create_rule_snippet(payload)
+    add_record("rule_snippets", snippet.model_dump())
+    write_audit(
+        action="rule_snippet.create",
+        object_type="rule_snippet",
+        object_id=snippet.id,
+        summary=f"创建规则条目：{snippet.name}",
+        metadata={"created_by": snippet.created_by},
+    )
+    return snippet
 
 
 @app.get("/api/rule-packages", response_model=list[RulePackage])
@@ -514,6 +563,31 @@ def list_rule_package_center_revisions(package_id: str) -> list[RulePackageRevis
         [item for item in revisions if item.rule_package_id == package_id and item.status != "deleted"],
         key=lambda item: (item.revision_no, item.created_at),
     )
+
+
+@app.get("/api/rule-package-center/packages/{package_id}/revision-diff", response_model=RulePackageRevisionDiff)
+def get_rule_package_center_revision_diff(
+    package_id: str,
+    from_revision_id: str,
+    to_revision_id: str,
+) -> RulePackageRevisionDiff:
+    packages, revisions = load_rule_package_center_state()
+    package = find_rule_package_center_package(packages, package_id)
+    package_revisions = {item.id: item for item in revisions if item.rule_package_id == package_id and item.status != "deleted"}
+    from_revision = package_revisions.get(from_revision_id)
+    to_revision = package_revisions.get(to_revision_id)
+    if from_revision is None or to_revision is None:
+        raise HTTPException(status_code=404, detail="Rule package revision not found")
+    return compare_rule_package_revisions(package, from_revision, to_revision)
+
+
+@app.get("/api/rule-package-center/packages/{package_id}/references", response_model=RulePackageUsageReport)
+def get_rule_package_center_references(package_id: str) -> RulePackageUsageReport:
+    state = load_state()
+    packages = [RulePackage(**item) for item in state["rule_packages"]]
+    revisions = [RulePackageRevision(**item) for item in state.get("rule_package_revisions", [])]
+    package = find_rule_package_center_package(packages, package_id)
+    return build_rule_package_usage_report(package, revisions, state["tasks"])
 
 
 @app.post("/api/rule-package-center/packages/{package_id}/edit", response_model=RulePackageRevision)
@@ -1022,6 +1096,11 @@ def verify_export_archive_endpoint(archive_id: str) -> ExportArchive:
 @app.get("/api/operators", response_model=list[OperatorInfo])
 def operators() -> list[OperatorInfo]:
     return list_operators()
+
+
+@app.get("/api/governance/dashboard", response_model=GovernanceDashboard)
+def governance_dashboard() -> GovernanceDashboard:
+    return build_governance_dashboard(load_state())
 
 
 @app.post("/api/results/{result_id}/assertion/review", response_model=TaskResult)

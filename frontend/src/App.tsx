@@ -15,6 +15,7 @@ import {
   getDomainPolicy,
   getExportArchives,
   getFieldMapping,
+  getGovernanceDashboard,
   getHealth,
   getExportFiles,
   getExportPackage,
@@ -32,6 +33,7 @@ import {
   verifyRulePackage,
   verifyAuditChain,
 } from "./api";
+import GovernanceBoard from "./GovernanceBoard";
 import RulePackageCenter from "./RulePackageCenter";
 import type {
   AuditChainVerification,
@@ -43,6 +45,7 @@ import type {
   ExportPackage,
   ExportRequest,
   FieldMapping,
+  GovernanceDashboard,
   HealthResponse,
   OperatorInfo,
   RulePackageBatchResult,
@@ -78,6 +81,7 @@ export default function App() {
   const [exportFiles, setExportFiles] = useState<ExportFile[]>([]);
   const [exportArchives, setExportArchives] = useState<ExportArchive[]>([]);
   const [exportPackage, setExportPackage] = useState<ExportPackage | null>(null);
+  const [governanceDashboard, setGovernanceDashboard] = useState<GovernanceDashboard | null>(null);
   const [auditVerification, setAuditVerification] = useState<AuditChainVerification | null>(null);
   const [operators, setOperators] = useState<OperatorInfo[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
@@ -114,7 +118,7 @@ export default function App() {
   const [archiveOperator, setArchiveOperator] = useState("归档员A");
   const [archivePurpose, setArchivePurpose] = useState("归档封存与验签报告生成");
   const [batchMessage, setBatchMessage] = useState<RulePackageBatchResult[] | null>(null);
-  const [notice, setNotice] = useState("系统处于 Stage 9：规则包中心、修订快照与编辑治理阶段");
+  const [notice, setNotice] = useState("系统处于 Stage 11：规则模板复用、AND/OR 组合编排与治理看板阶段");
   const [isPending, setIsPending] = useState(false);
   const [activeView, setActiveView] = useState<"workbench" | "rule-packages">("workbench");
 
@@ -123,6 +127,7 @@ export default function App() {
       nextHealth,
       nextPolicy,
       nextDatasets,
+      nextGovernanceDashboard,
       nextRulePackages,
       nextRuleSigners,
       nextTasks,
@@ -136,6 +141,7 @@ export default function App() {
       getHealth(),
       getDomainPolicy(),
       getDatasets(),
+      getGovernanceDashboard(),
       getRulePackages(),
       getRuleSigners(),
       getTasks(),
@@ -150,6 +156,7 @@ export default function App() {
       setHealth(nextHealth);
       setDomainPolicy(nextPolicy);
       setDatasets(nextDatasets);
+      setGovernanceDashboard(nextGovernanceDashboard);
       setRulePackages(nextRulePackages);
       setTrustedSigners(nextRuleSigners);
       setTasks(nextTasks);
@@ -595,6 +602,8 @@ export default function App() {
         />
       ) : (
       <section className="workbench">
+        <GovernanceBoard dashboard={governanceDashboard} />
+
         <article className="panel panel--upload">
           <div className="panel__heading">
             <p className="eyebrow">01 Local Data</p>

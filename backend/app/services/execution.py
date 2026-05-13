@@ -8,6 +8,7 @@ from typing import Any
 
 from app.models.schemas import AssertionReviewState, Dataset, FieldMapping, Task, TaskResult
 from app.services.audit import utc_now
+from app.services.rule_logic import count_rule_items, evaluate_rule_tree
 
 
 LOCAL_DEID_NAMESPACE = "domain-local-stage2"
@@ -38,33 +39,6 @@ def local_digest(material: str) -> str:
     return hashlib.sha256(f"{LOCAL_DEID_NAMESPACE}|{material}".encode("utf-8")).hexdigest()
 
 
-def compare_rule_value(actual: str, operator: str, expected: Any) -> bool | None:
-    if operator == "exists":
-        return bool(actual)
-    if operator == "not_empty":
-        return bool(actual)
-    if not actual:
-        return None
-    if operator == "eq":
-        return actual == str(expected)
-    if operator == "neq":
-        return actual != str(expected)
-    if operator == "in":
-        if not isinstance(expected, list):
-            return None
-        return actual in {str(item) for item in expected}
-    if operator in {"gte", "lte"}:
-        try:
-            actual_num = float(actual)
-            expected_num = float(expected)
-        except (TypeError, ValueError):
-            return None
-        if operator == "gte":
-            return actual_num >= expected_num
-        return actual_num <= expected_num
-    return None
-
-
 def evaluate_rules(rows: list[dict[str, str]], rules: list[dict[str, Any]]) -> dict[str, Any]:
     if not rules:
         return {
@@ -80,25 +54,16 @@ def evaluate_rules(rows: list[dict[str, str]], rules: list[dict[str, Any]]) -> d
     unknown_count = 0
 
     for row in rows:
-        row_results: list[bool | None] = []
-        for rule in rules:
-            field = str(rule.get("field", "")).strip()
-            operator = str(rule.get("operator", "")).strip()
-            expected = rule.get("value")
-            if not field or not operator:
-                row_results.append(None)
-                continue
-            row_results.append(compare_rule_value(normalize(row.get(field)), operator, expected))
-
-        if any(result is False for result in row_results):
+        result = evaluate_rule_tree(row, rules)
+        if result is False:
             fail_count += 1
-        elif any(result is None for result in row_results):
+        elif result is None:
             unknown_count += 1
         else:
             pass_count += 1
 
     return {
-        "rule_count": len(rules),
+        "rule_count": count_rule_items(rules),
         "rule_evaluated_count": len(rows),
         "rule_pass_count": pass_count,
         "rule_fail_count": fail_count,

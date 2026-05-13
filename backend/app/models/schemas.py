@@ -41,6 +41,58 @@ class FieldMappingCreate(BaseModel):
     group_fields: dict[str, str] = Field(default_factory=dict)
 
 
+def required_text(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("瀛楁涓嶈兘涓虹┖")
+    return cleaned
+
+
+class RuleTemplateCreate(BaseModel):
+    name: str
+    description: str | None = None
+    rules: list[dict[str, Any]] = Field(default_factory=list)
+    created_by: str
+
+    @field_validator("name", "created_by")
+    @classmethod
+    def validate_required_fields(cls, value: str) -> str:
+        return required_text(value)
+
+
+class RuleTemplate(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    rules: list[dict[str, Any]] = Field(default_factory=list)
+    rules_count: int = 0
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class RuleSnippetCreate(BaseModel):
+    name: str
+    description: str | None = None
+    rule: dict[str, Any]
+    created_by: str
+
+    @field_validator("name", "created_by")
+    @classmethod
+    def validate_required_fields(cls, value: str) -> str:
+        return required_text(value)
+
+
+class RuleSnippet(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    rule: dict[str, Any]
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
 class TaskCreate(BaseModel):
     name: str
     dataset_ids: list[str] = Field(default_factory=list)
@@ -206,6 +258,66 @@ class RulePackageRevision(BaseModel):
     based_on_revision_id: str | None = None
     content_hash: str
     created_at: str
+
+
+class RulePackageDiffFieldChange(BaseModel):
+    field: str
+    before: Any | None = None
+    after: Any | None = None
+
+
+class RulePackageDiffRuleChange(BaseModel):
+    change_type: Literal["added", "removed", "modified"]
+    rule_key: str
+    field: str
+    operator: str
+    before_value: Any | None = None
+    after_value: Any | None = None
+
+
+class RulePackageRevisionDiff(BaseModel):
+    package_id: str
+    package_name: str
+    from_revision_id: str
+    from_revision_no: int
+    to_revision_id: str
+    to_revision_no: int
+    based_on_match: bool
+    field_changes: list[RulePackageDiffFieldChange] = Field(default_factory=list)
+    rule_changes: list[RulePackageDiffRuleChange] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class RulePackageTaskReference(BaseModel):
+    task_id: str
+    task_name: str
+    task_status: str
+    created_at: str
+    output_policy: str
+    referenced_revision_id: str | None = None
+    referenced_revision_no: int | None = None
+    referenced_revision_status: RulePackageStatus | None = None
+    is_current_revision: bool = False
+
+
+class RulePackageRevisionReferenceSummary(BaseModel):
+    revision_id: str
+    revision_no: int
+    revision_status: RulePackageStatus
+    is_current_revision: bool = False
+    task_count: int = 0
+
+
+class RulePackageUsageReport(BaseModel):
+    package_id: str
+    package_name: str
+    current_revision_id: str | None = None
+    current_revision_no: int | None = None
+    total_task_count: int = 0
+    current_revision_task_count: int = 0
+    historical_revision_task_count: int = 0
+    revision_summaries: list[RulePackageRevisionReferenceSummary] = Field(default_factory=list)
+    tasks: list[RulePackageTaskReference] = Field(default_factory=list)
 
 
 class RulePackageBatchResult(BaseModel):
@@ -399,3 +511,15 @@ class DomainPolicy(BaseModel):
     rule_package_import_policy: str
     signature_required: bool
     default_output_policy: Literal["local_only"]
+
+
+class GovernanceDashboard(BaseModel):
+    task_counts: dict[str, int] = Field(default_factory=dict)
+    output_counts: dict[str, int] = Field(default_factory=dict)
+    rule_package_counts: dict[str, int] = Field(default_factory=dict)
+    pending_assertion_count: int = 0
+    audit_total_entries: int = 0
+    recent_tasks: list[Task] = Field(default_factory=list)
+    recent_export_requests: list[ExportRequest] = Field(default_factory=list)
+    recent_export_files: list[ExportFile] = Field(default_factory=list)
+    recent_archives: list[ExportArchive] = Field(default_factory=list)
