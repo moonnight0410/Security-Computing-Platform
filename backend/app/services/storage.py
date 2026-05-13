@@ -123,6 +123,7 @@ def normalize_state(state: dict[str, list[dict[str, Any]]]) -> dict[str, list[di
         task.setdefault("output_policy", "local_only")
         task.setdefault("aggregate_threshold", None)
         task.setdefault("aggregate_group_by", None)
+        task.setdefault("updated_at", task.get("created_at"))
 
     for request in state.get("export_requests", []):
         request.setdefault("status", "pending")

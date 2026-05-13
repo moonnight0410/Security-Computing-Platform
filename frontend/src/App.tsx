@@ -1,4 +1,4 @@
-import { FormEvent, startTransition, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, startTransition, useEffect, useState } from "react";
 
 import {
   approveExportRequest,
@@ -9,29 +9,31 @@ import {
   createExportRequest,
   createRulePackage,
   createTask,
+  deleteTask,
   executeTask,
   getAudit,
   getDatasets,
   getDomainPolicy,
   getExportArchives,
-  getFieldMapping,
-  getGovernanceDashboard,
-  getHealth,
   getExportFiles,
   getExportPackage,
   getExportRequests,
+  getFieldMapping,
+  getGovernanceDashboard,
+  getHealth,
   getOperators,
+  getResults,
   getRulePackages,
   getRuleSigners,
-  getResults,
   getTasks,
   persistExportFile,
   reviewAssertion,
   saveFieldMapping,
+  updateTask,
   uploadDataset,
+  verifyAuditChain,
   verifyExportArchive,
   verifyRulePackage,
-  verifyAuditChain,
 } from "./api";
 import GovernanceBoard from "./GovernanceBoard";
 import RulePackageCenter from "./RulePackageCenter";
@@ -48,29 +50,108 @@ import type {
   GovernanceDashboard,
   HealthResponse,
   OperatorInfo,
-  RulePackageBatchResult,
   RulePackage,
+  RulePackageBatchResult,
   Task,
   TaskResult,
   TrustedSignerInfo,
 } from "./types";
 
-const STAGE_CARDS = [
-  { label: "本域数据", value: "只在本域导入、画像、留存", tone: "sand" },
-  { label: "字段映射", value: "配置主键、子键、敏感字段", tone: "ink" },
-  { label: "本地执行", value: "主键、去标识、算子均域内执行", tone: "green" },
-  { label: "结果边界", value: "只返回摘要、回执和阈值统计", tone: "rust" },
-];
+type OutputPolicy = "local_only" | "execution_receipt" | "manual_assertion" | "aggregate_summary";
+type AggregateGroupBy = "department" | "matter_type" | "month";
+type ExportType = "receipt" | "assertion" | "aggregate_summary";
 
-function formatTime(value: string): string {
+type ImportedRulePackage = {
+  name: string;
+  version: string;
+  purpose: string;
+  signer_name: string;
+  signature_ref: string;
+  signature: string;
+  rules: Array<Record<string, unknown>>;
+  notes?: string | null;
+};
+
+function formatTime(value?: string | null): string {
+  if (!value) {
+    return "-";
+  }
   return new Date(value).toLocaleString("zh-CN", {
     hour12: false,
   });
 }
 
+function outputPolicyLabel(policy: OutputPolicy): string {
+  if (policy === "execution_receipt") {
+    return "执行回执";
+  }
+  if (policy === "manual_assertion") {
+    return "结论声明";
+  }
+  if (policy === "aggregate_summary") {
+    return "聚合统计";
+  }
+  return "仅本域留存";
+}
+
+function aggregateDimensionLabel(value?: AggregateGroupBy | null): string {
+  if (value === "matter_type") {
+    return "事项类型";
+  }
+  if (value === "month") {
+    return "月份";
+  }
+  return "部门";
+}
+
+function normalizeImportedRulePackage(raw: unknown, defaultSigner?: TrustedSignerInfo): ImportedRulePackage {
+  const source =
+    raw && typeof raw === "object" && "package" in raw && raw.package && typeof raw.package === "object"
+      ? (raw.package as Record<string, unknown>)
+      : (raw as Record<string, unknown>);
+
+  if (!source || typeof source !== "object") {
+    throw new Error("规则包文件内容不是合法 JSON 对象。");
+  }
+
+  const rules = source.rules;
+  if (!Array.isArray(rules)) {
+    throw new Error("规则包文件缺少 rules 数组。");
+  }
+
+  const name = String(source.name ?? "").trim();
+  const purpose = String(source.purpose ?? "").trim();
+  if (!name || !purpose) {
+    throw new Error("规则包文件缺少 name 或 purpose。");
+  }
+
+  return {
+    name,
+    version: String(source.version ?? "0.1.0").trim() || "0.1.0",
+    purpose,
+    signer_name: String(source.signer_name ?? defaultSigner?.signer_name ?? "").trim(),
+    signature_ref: String(source.signature_ref ?? defaultSigner?.signature_ref ?? "").trim(),
+    signature: String(source.signature ?? "").trim(),
+    rules: rules as Array<Record<string, unknown>>,
+    notes: source.notes ? String(source.notes) : undefined,
+  };
+}
+
+function countRuleItems(rules: Array<Record<string, unknown>>): number {
+  const countNode = (node: Record<string, unknown>): number => {
+    if (node.type === "group" && Array.isArray(node.children)) {
+      return node.children.reduce((total, child) => total + countNode(child as Record<string, unknown>), 0);
+    }
+    return 1;
+  };
+  return rules.reduce((total, rule) => total + countNode(rule), 0);
+}
+
 export default function App() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [, setHealth] = useState<HealthResponse | null>(null);
+  const [notice, setNotice] = useState("Stage 12：规则包导入登记与本域任务草稿完整工作面板。");
   const [domainPolicy, setDomainPolicy] = useState<DomainPolicy | null>(null);
+  const [governanceDashboard, setGovernanceDashboard] = useState<GovernanceDashboard | null>(null);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [fieldMapping, setFieldMapping] = useState<FieldMapping | null>(null);
   const [rulePackages, setRulePackages] = useState<RulePackage[]>([]);
@@ -81,53 +162,52 @@ export default function App() {
   const [exportFiles, setExportFiles] = useState<ExportFile[]>([]);
   const [exportArchives, setExportArchives] = useState<ExportArchive[]>([]);
   const [exportPackage, setExportPackage] = useState<ExportPackage | null>(null);
-  const [governanceDashboard, setGovernanceDashboard] = useState<GovernanceDashboard | null>(null);
   const [auditVerification, setAuditVerification] = useState<AuditChainVerification | null>(null);
   const [operators, setOperators] = useState<OperatorInfo[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
   const [selectedRulePackageId, setSelectedRulePackageId] = useState("");
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [activeView, setActiveView] = useState<"workbench" | "rule-packages">("workbench");
+  const [isPending, setIsPending] = useState(false);
+
   const [taskName, setTaskName] = useState("本域联查任务草稿");
-  const [rulePackageName, setRulePackageName] = useState("事项规则包草稿");
-  const [rulePackagePurpose, setRulePackagePurpose] = useState("下发不含数据的联查问题、规则说明和算子声明");
-  const [rulePackageSignerName, setRulePackageSignerName] = useState("市级规则中心");
-  const [rulePackageSignatureRef, setRulePackageSignatureRef] = useState("SIG-CENTER-001");
-  const [rulePackageSignature, setRulePackageSignature] = useState("");
-  const [ruleField, setRuleField] = useState("benefit_status");
-  const [ruleOperator, setRuleOperator] = useState<"eq" | "neq" | "exists" | "not_empty" | "gte" | "lte">("eq");
-  const [ruleValue, setRuleValue] = useState("正常");
-  const [approverName, setApproverName] = useState("审核员A");
-  const [outputPolicy, setOutputPolicy] = useState<"local_only" | "execution_receipt" | "manual_assertion" | "aggregate_summary">("local_only");
+  const [taskDescription, setTaskDescription] = useState("用于本域内规则联查与安全输出控制。");
+  const [outputPolicy, setOutputPolicy] = useState<OutputPolicy>("local_only");
   const [aggregateThreshold, setAggregateThreshold] = useState(10);
-  const [aggregateGroupBy, setAggregateGroupBy] = useState<"department" | "matter_type" | "month">("department");
+  const [aggregateGroupBy, setAggregateGroupBy] = useState<AggregateGroupBy>("department");
+
   const [primaryField, setPrimaryField] = useState("");
   const [subField, setSubField] = useState("");
   const [sensitiveField, setSensitiveField] = useState("");
   const [departmentField, setDepartmentField] = useState("");
   const [matterTypeField, setMatterTypeField] = useState("");
   const [monthField, setMonthField] = useState("");
-  const [exportType, setExportType] = useState<"receipt" | "assertion" | "aggregate_summary">("receipt");
-  const [exportRequester, setExportRequester] = useState("经办人A");
-  const [exportApprover, setExportApprover] = useState("审核员B");
-  const [exportPurpose, setExportPurpose] = useState("事项办理结果反馈");
-  const [assertionReviewer, setAssertionReviewer] = useState("审核员C");
-  const [assertionFinalStatement, setAssertionFinalStatement] = useState("");
-  const [assertionComment, setAssertionComment] = useState("");
+
+  const [approverName, setApproverName] = useState("规则审批人A");
   const [selectedRulePackageIds, setSelectedRulePackageIds] = useState<string[]>([]);
+  const [batchMessage, setBatchMessage] = useState<RulePackageBatchResult[] | null>(null);
+  const [rulePackageImportFileName, setRulePackageImportFileName] = useState("");
+  const [rulePackageImportDraft, setRulePackageImportDraft] = useState<ImportedRulePackage | null>(null);
+
+  const [exportType, setExportType] = useState<ExportType>("receipt");
+  const [exportRequester, setExportRequester] = useState("经办人A");
+  const [exportApprover, setExportApprover] = useState("审批人B");
+  const [exportPurpose, setExportPurpose] = useState("事项办理结果反馈");
   const [selectedExportFileIds, setSelectedExportFileIds] = useState<string[]>([]);
   const [archiveOperator, setArchiveOperator] = useState("归档员A");
   const [archivePurpose, setArchivePurpose] = useState("归档封存与验签报告生成");
-  const [batchMessage, setBatchMessage] = useState<RulePackageBatchResult[] | null>(null);
-  const [notice, setNotice] = useState("系统处于 Stage 11：规则模板复用、AND/OR 组合编排与治理看板阶段");
-  const [isPending, setIsPending] = useState(false);
-  const [activeView, setActiveView] = useState<"workbench" | "rule-packages">("workbench");
+
+  const [assertionReviewer, setAssertionReviewer] = useState("审批人C");
+  const [assertionFinalStatement, setAssertionFinalStatement] = useState("");
+  const [assertionComment, setAssertionComment] = useState("");
 
   async function refresh() {
     const [
       nextHealth,
       nextPolicy,
+      nextDashboard,
       nextDatasets,
-      nextGovernanceDashboard,
       nextRulePackages,
       nextRuleSigners,
       nextTasks,
@@ -140,8 +220,8 @@ export default function App() {
     ] = await Promise.all([
       getHealth(),
       getDomainPolicy(),
-      getDatasets(),
       getGovernanceDashboard(),
+      getDatasets(),
       getRulePackages(),
       getRuleSigners(),
       getTasks(),
@@ -152,11 +232,12 @@ export default function App() {
       getOperators(),
       getAudit(),
     ]);
+
     startTransition(() => {
       setHealth(nextHealth);
       setDomainPolicy(nextPolicy);
+      setGovernanceDashboard(nextDashboard);
       setDatasets(nextDatasets);
-      setGovernanceDashboard(nextGovernanceDashboard);
       setRulePackages(nextRulePackages);
       setTrustedSigners(nextRuleSigners);
       setTasks(nextTasks);
@@ -166,19 +247,16 @@ export default function App() {
       setExportArchives(nextExportArchives);
       setOperators(nextOperators);
       setAudit(nextAudit);
+
       setSelectedDatasetId((current) => current || nextDatasets[0]?.id || "");
-      setSelectedRulePackageId((current) => current || nextRulePackages[0]?.id || "");
-      if (nextRuleSigners.length) {
-        setRulePackageSignerName((current) => current || nextRuleSigners[0].signer_name);
-        setRulePackageSignatureRef((current) => current || nextRuleSigners[0].signature_ref);
-      }
+      setSelectedRulePackageId((current) => current || nextRulePackages.find((item) => item.status === "approved")?.id || "");
       setAggregateThreshold(nextPolicy.aggregate_min_threshold);
     });
   }
 
   useEffect(() => {
     refresh().catch((error: unknown) => {
-      setNotice(error instanceof Error ? error.message : "无法连接本地后端服务");
+      setNotice(error instanceof Error ? error.message : "无法连接本地后端服务。");
     });
   }, []);
 
@@ -199,16 +277,30 @@ export default function App() {
         setMonthField(mapping.group_fields.month ?? "");
       })
       .catch((error: unknown) => {
-        setNotice(error instanceof Error ? error.message : "字段映射加载失败");
+        setNotice(error instanceof Error ? error.message : "字段映射加载失败。");
       });
   }, [selectedDatasetId]);
 
-  useEffect(() => {
-    const signer = trustedSigners.find((item) => item.signer_name === rulePackageSignerName);
-    if (signer) {
-      setRulePackageSignatureRef(signer.signature_ref);
-    }
-  }, [rulePackageSignerName, trustedSigners]);
+  function resetTaskDraftForm() {
+    setSelectedTaskId("");
+    setTaskName("本域联查任务草稿");
+    setTaskDescription("用于本域内规则联查与安全输出控制。");
+    setOutputPolicy("local_only");
+    setAggregateGroupBy("department");
+    setAggregateThreshold(domainPolicy?.aggregate_min_threshold ?? 10);
+    setSelectedRulePackageId(rulePackages.find((item) => item.status === "approved")?.id ?? "");
+  }
+
+  function fillTaskDraftForm(task: Task) {
+    setSelectedTaskId(task.id);
+    setTaskName(task.name);
+    setTaskDescription(task.description ?? "");
+    setSelectedDatasetId(task.dataset_ids[0] ?? "");
+    setSelectedRulePackageId(task.rule_package_id ?? "");
+    setOutputPolicy(task.output_policy);
+    setAggregateThreshold(task.aggregate_threshold ?? domainPolicy?.aggregate_min_threshold ?? 10);
+    setAggregateGroupBy(task.aggregate_group_by ?? "department");
+  }
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -216,7 +308,7 @@ export default function App() {
     const input = form.elements.namedItem("dataset") as HTMLInputElement | null;
     const file = input?.files?.[0];
     if (!file) {
-      setNotice("请选择需要导入到本域的数据文件");
+      setNotice("请选择需要导入到本域的数据文件。");
       return;
     }
 
@@ -224,40 +316,58 @@ export default function App() {
     try {
       const dataset = await uploadDataset(file);
       await refresh();
-      setNotice(`已在本域导入数据集：${dataset.source_filename}。不会生成任何出域数据。`);
+      setSelectedDatasetId(dataset.id);
+      setNotice(`已完成本域数据导入：${dataset.source_filename}。`);
       form.reset();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "导入失败");
+      setNotice(error instanceof Error ? error.message : "数据导入失败。");
     } finally {
       setIsPending(false);
     }
   }
 
-  async function handleCreateRulePackage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleRulePackageFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      setRulePackageImportDraft(null);
+      setRulePackageImportFileName("");
+      return;
+    }
+
     setIsPending(true);
     try {
-      const rules = ruleField
-        ? [
-            {
-              field: ruleField,
-              operator: ruleOperator,
-              value: ruleOperator === "exists" || ruleOperator === "not_empty" ? null : ruleValue,
-            },
-          ]
-        : [];
-      const rulePackage = await createRulePackage(
-        rulePackageName,
-        rulePackagePurpose,
-        rulePackageSignerName,
-        rulePackageSignatureRef,
-        rulePackageSignature,
-        rules,
-      );
-      await refresh();
-      setNotice(`已登记规则包：${rulePackage.name}，验签状态为 ${rulePackage.verification_status}`);
+      const text = await file.text();
+      const parsed = JSON.parse(text) as unknown;
+      const normalized = normalizeImportedRulePackage(parsed, trustedSigners[0]);
+      setRulePackageImportDraft(normalized);
+      setRulePackageImportFileName(file.name);
+      setNotice(`已完成规则包预检：${normalized.name}。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "规则包登记失败");
+      setRulePackageImportDraft(null);
+      setRulePackageImportFileName(file.name);
+      setNotice(error instanceof Error ? error.message : "规则包文件解析失败。");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleImportRulePackage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!rulePackageImportDraft) {
+      setNotice("请先选择并通过预检的规则包文件。");
+      return;
+    }
+
+    setIsPending(true);
+    try {
+      const created = await createRulePackage(rulePackageImportDraft);
+      await refresh();
+      setRulePackageImportDraft(null);
+      setRulePackageImportFileName("");
+      event.currentTarget.reset();
+      setNotice(`已登记规则包：${created.name}，验签状态为 ${created.verification_status}。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "规则包登记失败。");
     } finally {
       setIsPending(false);
     }
@@ -266,7 +376,7 @@ export default function App() {
   async function handleSaveFieldMapping(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedDatasetId) {
-      setNotice("请先选择本域数据集");
+      setNotice("请先选择本域数据集。");
       return;
     }
 
@@ -283,9 +393,89 @@ export default function App() {
         },
       });
       setFieldMapping(mapping);
-      setNotice("字段映射已保存，本域任务可执行。");
+      setNotice("字段映射已保存。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "字段映射保存失败");
+      setNotice(error instanceof Error ? error.message : "字段映射保存失败。");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  function buildTaskPayload() {
+    return {
+      name: taskName,
+      dataset_ids: selectedDatasetId ? [selectedDatasetId] : [],
+      rule_package_id: selectedRulePackageId || null,
+      rule_package_revision_id: null,
+      output_policy: outputPolicy,
+      aggregate_threshold: outputPolicy === "aggregate_summary" ? aggregateThreshold : undefined,
+      aggregate_group_by: outputPolicy === "aggregate_summary" ? aggregateGroupBy : undefined,
+      description: taskDescription || undefined,
+    };
+  }
+
+  async function handleCreateTaskDraft(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsPending(true);
+    try {
+      const task = await createTask(buildTaskPayload());
+      await refresh();
+      fillTaskDraftForm(task);
+      setNotice(`已创建本域任务草稿：${task.name}。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "创建任务草稿失败。");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleUpdateTaskDraft() {
+    if (!selectedTaskId) {
+      setNotice("请先选择需要编辑的任务草稿。");
+      return;
+    }
+
+    setIsPending(true);
+    try {
+      const task = await updateTask(selectedTaskId, buildTaskPayload());
+      await refresh();
+      fillTaskDraftForm(task);
+      setNotice(`已更新任务草稿：${task.name}。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "更新任务草稿失败。");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleSaveAsNewDraft() {
+    setIsPending(true);
+    try {
+      const task = await createTask({
+        ...buildTaskPayload(),
+        name: selectedTaskId ? `${taskName}-副本` : taskName,
+      });
+      await refresh();
+      fillTaskDraftForm(task);
+      setNotice(`已另存为新任务草稿：${task.name}。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "另存任务草稿失败。");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleDeleteTaskDraft(taskId: string) {
+    setIsPending(true);
+    try {
+      await deleteTask(taskId);
+      await refresh();
+      if (selectedTaskId === taskId) {
+        resetTaskDraftForm();
+      }
+      setNotice("已删除任务草稿。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "删除任务草稿失败。");
     } finally {
       setIsPending(false);
     }
@@ -296,9 +486,9 @@ export default function App() {
     try {
       const rulePackage = await approveRulePackage(rulePackageId, approverName);
       await refresh();
-      setNotice(`规则包已审批通过：${rulePackage.name}`);
+      setNotice(`规则包已审批通过：${rulePackage.name}。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "规则包审批失败");
+      setNotice(error instanceof Error ? error.message : "规则包审批失败。");
     } finally {
       setIsPending(false);
     }
@@ -309,9 +499,9 @@ export default function App() {
     try {
       const rulePackage = await verifyRulePackage(rulePackageId);
       await refresh();
-      setNotice(`规则包验签结果：${rulePackage.verification_message ?? rulePackage.verification_status}`);
+      setNotice(`规则包验签结果：${rulePackage.verification_message ?? rulePackage.verification_status}。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "规则包验签失败");
+      setNotice(error instanceof Error ? error.message : "规则包验签失败。");
     } finally {
       setIsPending(false);
     }
@@ -319,17 +509,18 @@ export default function App() {
 
   async function handleBatchVerifyRulePackages() {
     if (!selectedRulePackageIds.length) {
-      setNotice("请先选择需要批量验签的规则包");
+      setNotice("请先选择需要批量验签的规则包。");
       return;
     }
+
     setIsPending(true);
     try {
-      const results = await batchVerifyRulePackages(selectedRulePackageIds);
-      setBatchMessage(results);
+      const nextResults = await batchVerifyRulePackages(selectedRulePackageIds);
+      setBatchMessage(nextResults);
       await refresh();
-      setNotice(`已完成 ${results.length} 个规则包的批量验签`);
+      setNotice(`已完成 ${nextResults.length} 个规则包的批量验签。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "批量验签失败");
+      setNotice(error instanceof Error ? error.message : "批量验签失败。");
     } finally {
       setIsPending(false);
     }
@@ -337,44 +528,18 @@ export default function App() {
 
   async function handleBatchApproveRulePackages() {
     if (!selectedRulePackageIds.length) {
-      setNotice("请先选择需要批量审批的规则包");
-      return;
-    }
-    setIsPending(true);
-    try {
-      const results = await batchApproveRulePackages(selectedRulePackageIds, approverName);
-      setBatchMessage(results);
-      await refresh();
-      setNotice(`已处理 ${results.length} 个规则包的批量审批`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "批量审批失败");
-    } finally {
-      setIsPending(false);
-    }
-  }
-
-  async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedDatasetId) {
-      setNotice("请先导入或选择一个本域数据集");
+      setNotice("请先选择需要批量审批的规则包。");
       return;
     }
 
     setIsPending(true);
     try {
-      const task = await createTask(
-        taskName,
-        [selectedDatasetId],
-        selectedRulePackageId || null,
-        null,
-        outputPolicy,
-        outputPolicy === "aggregate_summary" ? aggregateThreshold : undefined,
-        outputPolicy === "aggregate_summary" ? aggregateGroupBy : undefined,
-      );
+      const nextResults = await batchApproveRulePackages(selectedRulePackageIds, approverName);
+      setBatchMessage(nextResults);
       await refresh();
-      setNotice(`已创建本域任务草稿：${task.name}，输出策略为 ${task.output_policy}`);
+      setNotice(`已完成 ${nextResults.length} 个规则包的批量审批。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "创建任务失败");
+      setNotice(error instanceof Error ? error.message : "批量审批失败。");
     } finally {
       setIsPending(false);
     }
@@ -385,9 +550,10 @@ export default function App() {
     try {
       const result = await executeTask(taskId);
       await refresh();
-      setNotice(`任务执行完成，处理 ${String(result.summary.row_count ?? 0)} 行。本域对象级明细未返回。`);
+      setSelectedTaskId(taskId);
+      setNotice(`任务执行完成，处理 ${String(result.summary.row_count ?? 0)} 行。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "任务执行失败");
+      setNotice(error instanceof Error ? error.message : "任务执行失败。");
     } finally {
       setIsPending(false);
     }
@@ -395,17 +561,18 @@ export default function App() {
 
   async function handleCreateExportRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!latestResult) {
-      setNotice("请先执行任务生成结果摘要");
+    if (!focusedResult) {
+      setNotice("请先执行任务生成结果。");
       return;
     }
+
     setIsPending(true);
     try {
-      const request = await createExportRequest(latestResult.id, exportType, exportRequester, exportPurpose);
+      const request = await createExportRequest(focusedResult.id, exportType, exportRequester, exportPurpose);
       await refresh();
-      setNotice(`已创建安全输出申请：${request.export_type}`);
+      setNotice(`已创建输出申请：${request.export_type}。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "创建输出申请失败");
+      setNotice(error instanceof Error ? error.message : "创建输出申请失败。");
     } finally {
       setIsPending(false);
     }
@@ -416,9 +583,9 @@ export default function App() {
     try {
       const request = await approveExportRequest(requestId, exportApprover);
       await refresh();
-      setNotice(`已审批安全输出申请：${request.export_type}`);
+      setNotice(`已审批输出申请：${request.export_type}。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "审批输出申请失败");
+      setNotice(error instanceof Error ? error.message : "审批输出申请失败。");
     } finally {
       setIsPending(false);
     }
@@ -429,9 +596,9 @@ export default function App() {
     try {
       const nextPackage = await getExportPackage(requestId);
       setExportPackage(nextPackage);
-      setNotice(`已生成安全输出包预览：${nextPackage.export_type}`);
+      setNotice(`已生成输出包预览：${nextPackage.export_type}。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "生成输出包失败");
+      setNotice(error instanceof Error ? error.message : "输出包预览生成失败。");
     } finally {
       setIsPending(false);
     }
@@ -440,11 +607,11 @@ export default function App() {
   async function handlePersistExportFile(requestId: string) {
     setIsPending(true);
     try {
-      const exportFile = await persistExportFile(requestId);
+      const file = await persistExportFile(requestId);
       await refresh();
-      setNotice(`安全输出包已写入本域文件：${exportFile.file_name}`);
+      setNotice(`已写入本域输出文件：${file.file_name}。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "输出包落盘失败");
+      setNotice(error instanceof Error ? error.message : "输出包落盘失败。");
     } finally {
       setIsPending(false);
     }
@@ -452,16 +619,17 @@ export default function App() {
 
   async function handleCreateExportArchive() {
     if (!selectedExportFileIds.length) {
-      setNotice("请先选择需要归档封存的输出文件");
+      setNotice("请先选择需要归档封存的输出文件。");
       return;
     }
+
     setIsPending(true);
     try {
       const archive = await createExportArchive(selectedExportFileIds, archiveOperator, archivePurpose);
       await refresh();
-      setNotice(`已创建归档封存：${archive.id}，共 ${archive.file_count} 个文件`);
+      setNotice(`已创建归档封存：${archive.id}。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "创建归档封存失败");
+      setNotice(error instanceof Error ? error.message : "创建归档封存失败。");
     } finally {
       setIsPending(false);
     }
@@ -472,9 +640,9 @@ export default function App() {
     try {
       const archive = await verifyExportArchive(archiveId);
       await refresh();
-      setNotice(archive.verification.valid ? `归档验签通过：${archive.id}` : `归档验签失败：${archive.verification.errors.join("；")}`);
+      setNotice(archive.verification.valid ? `归档验签通过：${archive.id}。` : `归档验签失败：${archive.id}。`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "归档验签失败");
+      setNotice(error instanceof Error ? error.message : "归档验签失败。");
     } finally {
       setIsPending(false);
     }
@@ -485,114 +653,58 @@ export default function App() {
     try {
       const result = await verifyAuditChain();
       setAuditVerification(result);
-      setNotice(result.valid ? `审计链校验通过，已检查 ${result.checked_entries} 条记录。` : `审计链校验失败：${result.errors.join("；")}`);
+      setNotice(result.valid ? `审计链校验通过，已检查 ${result.checked_entries} 条记录。` : "审计链校验失败。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "审计链校验失败");
+      setNotice(error instanceof Error ? error.message : "审计链校验失败。");
     } finally {
       setIsPending(false);
     }
   }
 
   async function handleReviewAssertion(decision: "approved" | "rejected") {
-    if (!latestResult?.assertion) {
-      setNotice("当前没有待审核的结论声明");
+    if (!focusedResult?.assertion) {
+      setNotice("当前没有待审批的结论声明。");
       return;
     }
 
     setIsPending(true);
     try {
       const result = await reviewAssertion(
-        latestResult.id,
+        focusedResult.id,
         assertionReviewer,
         decision,
         assertionFinalStatement || undefined,
         assertionComment || undefined,
       );
       await refresh();
-      setNotice(`结论声明已${decision === "approved" ? "审核通过" : "驳回"}：${result.assertion?.status ?? "unknown"}`);
+      setNotice(`结论声明已${decision === "approved" ? "审批通过" : "驳回"}：${result.assertion?.status ?? "-"}`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "结论声明审核失败");
+      setNotice(error instanceof Error ? error.message : "结论声明审批失败。");
     } finally {
       setIsPending(false);
     }
   }
 
   const latestDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) ?? datasets[0];
-  const fieldNames = latestDataset?.fields.map((field) => field.name) ?? [];
-  const approvedRulePackages = rulePackages.filter((rulePackage) => rulePackage.status === "approved");
   const latestResult = results[results.length - 1];
+  const focusedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
+  const focusedResult = (focusedTask && results.find((item) => item.task_id === focusedTask.id)) ?? latestResult ?? null;
+  const approvedRulePackages = rulePackages.filter((rulePackage) => rulePackage.status === "approved");
+  const fieldNames = latestDataset?.fields.map((field) => field.name) ?? [];
 
-  return (
-    <main className="shell">
-      {false ? (
-        <>
-      <section className="hero">
-        <div className="hero__copy">
-          <p className="eyebrow">Domain-Local Query Console</p>
-          <h1>本域数据不出域联查计算系统</h1>
-          <p className="hero__lead">
-            Stage 8 已补齐输出文件归档封存与验签报告、规则包批量管理，并将规则包验签升级为正式公私钥验签。
-          </p>
-        </div>
-        <div className="hero__status">
-          <span className="status-dot" />
-          <strong>{health?.status === "ok" ? "本域后端在线" : "等待本域后端连接"}</strong>
-          <small>{health?.workspace ?? "启动后端后显示本域工作目录"}</small>
-        </div>
-      </section>
-
-      <section className="policy-banner">
-        <div>
-          <p className="eyebrow">Boundary</p>
-          <strong>{domainPolicy?.summary ?? "本域数据边界策略加载中"}</strong>
-        </div>
-        <div className="policy-tags">
-          {(domainPolicy?.prohibited_exports ?? ["原始数据", "加密数据", "哈希数据", "去标识数据"]).slice(0, 4).map((item) => (
-            <span key={item}>{item}不得出域</span>
-          ))}
-        </div>
-        <p className="policy-note">
-          允许输出：{domainPolicy?.allowed_outputs.join("、") ?? "执行回执、结论声明、聚合统计"}；聚合统计默认最小阈值{" "}
-          {domainPolicy?.aggregate_min_threshold ?? 10}。
-        </p>
-        <p className="policy-note">
-          分组策略：{domainPolicy?.aggregate_grouping_policy ?? "仅允许单维粗粒度分组"}；结论声明审批：{domainPolicy?.assertion_approval_policy ?? "执行人与审核人分离"}。
-        </p>
-      </section>
-
-      <section className="stage-grid" aria-label="Stage 1 capability map">
-        {STAGE_CARDS.map((card) => (
-          <article className={`stage-card stage-card--${card.tone}`} key={card.label}>
-            <span>{card.label}</span>
-            <strong>{card.value}</strong>
-          </article>
-        ))}
-      </section>
-
-        </>
-      ) : null}
-      <div className="notice" role="status">
-        {isPending ? "正在处理本域任务..." : notice}
-      </div>
-
-      <div className="view-switch">
-        <button
-          className={activeView === "workbench" ? "view-switch__button view-switch__button--active" : "view-switch__button"}
-          type="button"
-          onClick={() => setActiveView("workbench")}
-        >
-          本域工作台
-        </button>
-        <button
-          className={activeView === "rule-packages" ? "view-switch__button view-switch__button--active" : "view-switch__button"}
-          type="button"
-          onClick={() => setActiveView("rule-packages")}
-        >
-          规则包中心
-        </button>
-      </div>
-
-      {activeView === "rule-packages" ? (
+  if (activeView === "rule-packages") {
+    return (
+      <main className="shell">
+        <section className="workspace-topbar">
+          <div>
+            <p className="eyebrow">Rule Package Center</p>
+            <h1>规则包编辑页</h1>
+          </div>
+          <button className="workspace-topbar__button" type="button" onClick={() => setActiveView("workbench")}>
+            返回工作台
+          </button>
+        </section>
+        <p className="notice">{notice}</p>
         <RulePackageCenter
           packages={rulePackages}
           signers={trustedSigners}
@@ -600,14 +712,33 @@ export default function App() {
           onNotice={setNotice}
           onRefresh={refresh}
         />
-      ) : (
-      <section className="workbench">
-        <GovernanceBoard dashboard={governanceDashboard} />
+      </main>
+    );
+  }
 
+  return (
+    <main className="shell">
+      <section className="workspace-topbar">
+        <div>
+          <p className="eyebrow">Workbench</p>
+          <h1>本域工作台</h1>
+        </div>
+        <button className="workspace-topbar__button" type="button" onClick={() => setActiveView("rule-packages")}>
+          打开规则包编辑页
+        </button>
+      </section>
+
+      <p className="notice">{notice}</p>
+
+      <GovernanceBoard dashboard={governanceDashboard} />
+
+      <section className="workbench">
         <article className="panel panel--upload">
           <div className="panel__heading">
-            <p className="eyebrow">01 Local Data</p>
-            <h2>本域数据导入</h2>
+            <div>
+              <p className="eyebrow">01 Local Data</p>
+              <h2>本域数据导入</h2>
+            </div>
           </div>
           <form className="upload-form" onSubmit={handleUpload}>
             <label>
@@ -618,71 +749,47 @@ export default function App() {
               本域导入并生成画像
             </button>
           </form>
-          <p className="hint">文件只写入本机 `workspace/imports`，Stage 1 不提供明细导出或跨域传输接口。</p>
+          <p className="hint">导入文件仅写入本地 `workspace/imports`，不提供任何明细出域接口。</p>
         </article>
 
         <article className="panel">
           <div className="panel__heading">
-            <p className="eyebrow">02 Rule Package</p>
-            <h2>规则包登记</h2>
+            <div>
+              <p className="eyebrow">02 Rule Package</p>
+              <h2>规则包登记</h2>
+            </div>
           </div>
-          <form className="task-form" onSubmit={handleCreateRulePackage}>
+
+          <form className="task-form" onSubmit={handleImportRulePackage}>
             <label>
-              规则包名称
-              <input value={rulePackageName} onChange={(event) => setRulePackageName(event.target.value)} />
+              导入规则包文件
+              <input type="file" accept=".json" onChange={(event) => void handleRulePackageFileChange(event)} />
             </label>
-            <label>
-              规则包用途
-              <input value={rulePackagePurpose} onChange={(event) => setRulePackagePurpose(event.target.value)} />
-            </label>
-            <label>
-              签名人
-              <select value={rulePackageSignerName} onChange={(event) => setRulePackageSignerName(event.target.value)}>
-                {trustedSigners.map((signer) => (
-                  <option key={signer.signer_name} value={signer.signer_name}>
-                    {signer.signer_name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              规则包签名引用
-              <input value={rulePackageSignatureRef} onChange={(event) => setRulePackageSignatureRef(event.target.value)} />
-            </label>
-            <label>
-              规则包签名值
-              <input value={rulePackageSignature} onChange={(event) => setRulePackageSignature(event.target.value)} />
-            </label>
-            <label>
-              规则字段
-              <input value={ruleField} onChange={(event) => setRuleField(event.target.value)} />
-            </label>
-            <label>
-              规则操作符
-              <select value={ruleOperator} onChange={(event) => setRuleOperator(event.target.value as typeof ruleOperator)}>
-                <option value="eq">等于</option>
-                <option value="neq">不等于</option>
-                <option value="exists">存在</option>
-                <option value="not_empty">非空</option>
-                <option value="gte">大于等于</option>
-                <option value="lte">小于等于</option>
-              </select>
-            </label>
-            {ruleOperator !== "exists" && ruleOperator !== "not_empty" ? (
-              <label>
-                规则值
-                <input value={ruleValue} onChange={(event) => setRuleValue(event.target.value)} />
-              </label>
-            ) : null}
-            <button disabled={isPending} type="submit">
-              登记待审批规则包
+            <button disabled={isPending || !rulePackageImportDraft} type="submit">
+              登记导入规则包
             </button>
           </form>
-          <p className="hint">先用 `scripts/bootstrap-stage8-keys.ps1` 生成密钥，再用 `scripts/generate-rule-package-signature.ps1` 本地生成签名。</p>
+
+          {rulePackageImportDraft ? (
+            <div className="result-block">
+              <strong>导入预检</strong>
+              <small>文件：{rulePackageImportFileName || "-"}</small>
+              <small>名称：{rulePackageImportDraft.name}</small>
+              <small>版本：{rulePackageImportDraft.version}</small>
+              <small>签名人：{rulePackageImportDraft.signer_name || "未填写"}</small>
+              <small>签名引用：{rulePackageImportDraft.signature_ref || "未填写"}</small>
+              <small>规则条目：{countRuleItems(rulePackageImportDraft.rules)}</small>
+              <small>用途：{rulePackageImportDraft.purpose}</small>
+            </div>
+          ) : (
+            <p className="hint">此处不再手工录入规则字段、操作符和值，统一通过 JSON 规则包导入登记；复杂创建与编辑请进入规则包编辑页。</p>
+          )}
+
           <label>
             审批人
             <input value={approverName} onChange={(event) => setApproverName(event.target.value)} />
           </label>
+
           <div className="task-row">
             <button disabled={isPending} type="button" onClick={handleBatchVerifyRulePackages}>
               批量验签
@@ -691,20 +798,22 @@ export default function App() {
               批量审批
             </button>
           </div>
+
           {batchMessage?.length ? (
             <div className="result-block">
               <strong>批量处理结果</strong>
               {batchMessage.map((item) => (
                 <small key={item.package_id}>
-                  {item.name} · {item.status} · {item.message}
+                  {item.name} / {item.status} / {item.message}
                 </small>
               ))}
             </div>
           ) : null}
+
           <div className="task-list">
-            {rulePackages.slice(0, 4).map((rulePackage) => (
+            {rulePackages.slice(0, 6).map((rulePackage) => (
               <div className="task-row" key={rulePackage.id}>
-                <label>
+                <label className="inline-check">
                   <input
                     checked={selectedRulePackageIds.includes(rulePackage.id)}
                     type="checkbox"
@@ -718,22 +827,20 @@ export default function App() {
                 </label>
                 <strong>{rulePackage.name}</strong>
                 <span>{rulePackage.status}</span>
-                <small>
-                  验签：{rulePackage.verification_status} / {rulePackage.signature_ref}
-                </small>
+                <small>验签：{rulePackage.verification_status}</small>
                 <small>规则数：{rulePackage.rules_count}</small>
-                <small>{rulePackage.verification_message ?? "待验签"}</small>
+                <small>签名引用：{rulePackage.signature_ref || "-"}</small>
                 {rulePackage.status !== "approved" ? (
-                  <>
-                    <button disabled={isPending} type="button" onClick={() => handleVerifyRulePackage(rulePackage.id)}>
-                      重新验签
+                  <div className="panel-actions">
+                    <button disabled={isPending} type="button" onClick={() => void handleVerifyRulePackage(rulePackage.id)}>
+                      验签
                     </button>
-                    <button disabled={isPending} type="button" onClick={() => handleApproveRulePackage(rulePackage.id)}>
-                      审批通过
+                    <button disabled={isPending} type="button" onClick={() => void handleApproveRulePackage(rulePackage.id)}>
+                      审批
                     </button>
-                  </>
+                  </div>
                 ) : (
-                  <small>审批人：{rulePackage.approved_by ?? "已审批"}</small>
+                  <small>审批人：{rulePackage.approved_by ?? "-"}</small>
                 )}
               </div>
             ))}
@@ -742,47 +849,61 @@ export default function App() {
 
         <article className="panel">
           <div className="panel__heading">
-            <p className="eyebrow">03 Profile</p>
-            <h2>本域字段画像</h2>
+            <div>
+              <p className="eyebrow">03 Profile</p>
+              <h2>本域字段画像</h2>
+            </div>
           </div>
           {latestDataset ? (
-            <div className="dataset-card">
-              <strong>{latestDataset.source_filename}</strong>
-              <span>
-                {latestDataset.row_count} 行 · {latestDataset.field_count} 字段
-              </span>
-              {latestDataset.note ? <em>{latestDataset.note}</em> : null}
-            </div>
-          ) : (
-            <p className="empty">暂无本域数据集，先导入一个 CSV 文件。</p>
-          )}
-          <div className="field-list">
-            {latestDataset?.fields.slice(0, 8).map((field) => (
-              <div className="field-row" key={field.name}>
-                <strong>{field.name}</strong>
-                <span>{field.inferred_type}</span>
-                <small>
-                  空值 {field.empty_count} · 重复 {field.duplicate_count}
-                </small>
+            <>
+              <div className="dataset-card">
+                <strong>{latestDataset.source_filename}</strong>
+                <span>
+                  {latestDataset.row_count} 行 / {latestDataset.field_count} 字段
+                </span>
+                {latestDataset.note ? <em>{latestDataset.note}</em> : null}
               </div>
-            ))}
-          </div>
+              <div className="field-list">
+                {latestDataset.fields.slice(0, 8).map((field) => (
+                  <div className="field-row" key={field.name}>
+                    <strong>{field.name}</strong>
+                    <span>{field.inferred_type}</span>
+                    <small>
+                      空值 {field.empty_count} / 重复 {field.duplicate_count}
+                    </small>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="empty">暂无本域数据集。</p>
+          )}
         </article>
 
-        <article className="panel">
+        <article className="panel task-draft-panel">
           <div className="panel__heading">
-            <p className="eyebrow">04 Local Task</p>
-            <h2>本域任务草稿</h2>
+            <div>
+              <p className="eyebrow">04 Local Task</p>
+              <h2>本域任务草稿</h2>
+            </div>
+            <button className="workspace-topbar__button" type="button" onClick={resetTaskDraftForm}>
+              新建草稿
+            </button>
           </div>
-          <form className="task-form" onSubmit={handleCreateTask}>
+
+          <form className="task-form" onSubmit={handleCreateTaskDraft}>
             <label>
               任务名称
               <input value={taskName} onChange={(event) => setTaskName(event.target.value)} />
             </label>
             <label>
-              选择本域数据集
+              任务说明
+              <input value={taskDescription} onChange={(event) => setTaskDescription(event.target.value)} />
+            </label>
+            <label>
+              数据集
               <select value={selectedDatasetId} onChange={(event) => setSelectedDatasetId(event.target.value)}>
-                <option value="">暂无选择</option>
+                <option value="">暂不绑定</option>
                 {datasets.map((dataset) => (
                   <option key={dataset.id} value={dataset.id}>
                     {dataset.source_filename}
@@ -791,7 +912,7 @@ export default function App() {
               </select>
             </label>
             <label>
-              选择规则包
+              规则包
               <select value={selectedRulePackageId} onChange={(event) => setSelectedRulePackageId(event.target.value)}>
                 <option value="">不绑定规则包</option>
                 {approvedRulePackages.map((rulePackage) => (
@@ -803,25 +924,25 @@ export default function App() {
             </label>
             <label>
               输出策略
-              <select value={outputPolicy} onChange={(event) => setOutputPolicy(event.target.value as typeof outputPolicy)}>
+              <select value={outputPolicy} onChange={(event) => setOutputPolicy(event.target.value as OutputPolicy)}>
                 <option value="local_only">仅本域留存</option>
-                <option value="execution_receipt">仅执行状态回执</option>
-                <option value="manual_assertion">结论声明双人流程</option>
-                <option value="aggregate_summary">聚合统计输出</option>
+                <option value="execution_receipt">执行回执</option>
+                <option value="manual_assertion">结论声明</option>
+                <option value="aggregate_summary">聚合统计</option>
               </select>
             </label>
             {outputPolicy === "aggregate_summary" ? (
               <>
                 <label>
-                  聚合统计分组维度
-                  <select value={aggregateGroupBy} onChange={(event) => setAggregateGroupBy(event.target.value as typeof aggregateGroupBy)}>
+                  分组维度
+                  <select value={aggregateGroupBy} onChange={(event) => setAggregateGroupBy(event.target.value as AggregateGroupBy)}>
                     <option value="department">部门</option>
                     <option value="matter_type">事项类型</option>
                     <option value="month">月份</option>
                   </select>
                 </label>
                 <label>
-                  聚合统计最小阈值
+                  最小阈值
                   <input
                     min={domainPolicy?.aggregate_min_threshold ?? 10}
                     step={1}
@@ -832,16 +953,79 @@ export default function App() {
                 </label>
               </>
             ) : null}
-            <button disabled={isPending || !selectedDatasetId} type="submit">
-              创建本域任务
-            </button>
+
+            <div className="task-row task-draft-actions">
+              <button disabled={isPending} type="submit">
+                创建草稿
+              </button>
+              <button disabled={isPending || !selectedTaskId} type="button" onClick={() => void handleUpdateTaskDraft()}>
+                保存修改
+              </button>
+              <button disabled={isPending} type="button" onClick={() => void handleSaveAsNewDraft()}>
+                另存为新草稿
+              </button>
+            </div>
           </form>
+
+          <div className="result-block">
+            <strong>草稿摘要</strong>
+            <small>当前模式：{selectedTaskId ? "编辑已有草稿" : "创建新草稿"}</small>
+            <small>输出策略：{outputPolicyLabel(outputPolicy)}</small>
+            <small>聚合维度：{outputPolicy === "aggregate_summary" ? aggregateDimensionLabel(aggregateGroupBy) : "未启用"}</small>
+            <small>最小阈值：{outputPolicy === "aggregate_summary" ? String(aggregateThreshold) : "-"}</small>
+          </div>
+
+          <div className="task-list">
+            {tasks.length ? (
+              [...tasks].reverse().slice(0, 8).map((task) => {
+                const taskDataset = datasets.find((item) => item.id === task.dataset_ids[0]);
+                const taskResult = results.find((item) => item.task_id === task.id);
+                return (
+                  <div className="task-row" key={task.id}>
+                    <strong>{task.name}</strong>
+                    <span>{task.status}</span>
+                    <small>数据集：{taskDataset?.source_filename ?? "-"}</small>
+                    <small>规则包：{rulePackages.find((item) => item.id === task.rule_package_id)?.name ?? "-"}</small>
+                    <small>输出策略：{outputPolicyLabel(task.output_policy)}</small>
+                    <small>更新时间：{formatTime(task.updated_at ?? task.created_at)}</small>
+                    <small>结果状态：{taskResult ? taskResult.status : "未执行"}</small>
+                    <div className="panel-actions">
+                      <button disabled={isPending} type="button" onClick={() => fillTaskDraftForm(task)}>
+                        编辑
+                      </button>
+                      <button disabled={isPending} type="button" onClick={() => void handleExecuteTask(task.id)}>
+                        执行
+                      </button>
+                      <button disabled={isPending} type="button" onClick={() => void handleDeleteTaskDraft(task.id)}>
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <p className="empty">暂无本域任务草稿。</p>
+            )}
+          </div>
+
+          {focusedTask ? (
+            <div className="result-block">
+              <strong>选中任务详情</strong>
+              <small>任务：{focusedTask.name}</small>
+              <small>状态：{focusedTask.status}</small>
+              <small>创建时间：{formatTime(focusedTask.created_at)}</small>
+              <small>最近更新时间：{formatTime(focusedTask.updated_at ?? focusedTask.created_at)}</small>
+              {focusedResult ? <small>执行结果：{focusedResult.status}</small> : <small>执行结果：未生成</small>}
+            </div>
+          ) : null}
         </article>
 
         <article className="panel">
           <div className="panel__heading">
-            <p className="eyebrow">05 Mapping</p>
-            <h2>字段映射</h2>
+            <div>
+              <p className="eyebrow">05 Mapping</p>
+              <h2>字段映射</h2>
+            </div>
           </div>
           <form className="task-form" onSubmit={handleSaveFieldMapping}>
             <label>
@@ -911,16 +1095,18 @@ export default function App() {
               </select>
             </label>
             <button disabled={isPending || !selectedDatasetId} type="submit">
-              保存本域字段映射
+              保存字段映射
             </button>
           </form>
-          {fieldMapping ? <p className="hint">上次映射更新时间：{formatTime(fieldMapping.updated_at)}</p> : null}
+          {fieldMapping ? <p className="hint">最近映射更新时间：{formatTime(fieldMapping.updated_at)}</p> : null}
         </article>
 
         <article className="panel panel--audit">
           <div className="panel__heading">
-            <p className="eyebrow">06 Audit</p>
-            <h2>边界审计</h2>
+            <div>
+              <p className="eyebrow">06 Audit</p>
+              <h2>边界审计</h2>
+            </div>
           </div>
           <button disabled={isPending} type="button" onClick={handleVerifyAuditChain}>
             校验审计链完整性
@@ -943,7 +1129,7 @@ export default function App() {
                 <div className="audit-row" key={entry.id}>
                   <strong>{entry.summary}</strong>
                   <span>
-                    {entry.action} · {formatTime(entry.created_at)}
+                    {entry.action} / {formatTime(entry.created_at)}
                   </span>
                 </div>
               ))
@@ -955,71 +1141,80 @@ export default function App() {
 
         <article className="panel">
           <div className="panel__heading">
-            <p className="eyebrow">07 Execute</p>
-            <h2>执行与结果</h2>
+            <div>
+              <p className="eyebrow">07 Execute</p>
+              <h2>执行与结果</h2>
+            </div>
           </div>
           <div className="task-list">
             {tasks.length ? (
-              tasks.slice(0, 6).map((task) => (
+              [...tasks].reverse().slice(0, 8).map((task) => (
                 <div className="task-row" key={task.id}>
                   <strong>{task.name}</strong>
                   <span>{task.output_policy}</span>
-                  {task.aggregate_threshold ? <small>阈值 {task.aggregate_threshold}</small> : null}
-                  {task.aggregate_group_by ? <small>分组 {task.aggregate_group_by}</small> : null}
-                  <button disabled={isPending || task.status === "completed"} type="button" onClick={() => handleExecuteTask(task.id)}>
+                  <small>状态：{task.status}</small>
+                  {task.aggregate_threshold ? <small>阈值：{task.aggregate_threshold}</small> : null}
+                  {task.aggregate_group_by ? <small>分组：{aggregateDimensionLabel(task.aggregate_group_by)}</small> : null}
+                  <button disabled={isPending || task.status === "completed"} type="button" onClick={() => void handleExecuteTask(task.id)}>
                     执行本域任务
                   </button>
                 </div>
               ))
             ) : (
-              <p className="empty">暂无本域任务草稿。</p>
+              <p className="empty">暂无待执行任务。</p>
             )}
           </div>
         </article>
 
         <article className="panel">
           <div className="panel__heading">
-            <p className="eyebrow">08 Result</p>
-            <h2>摘要结果</h2>
+            <div>
+              <p className="eyebrow">08 Result</p>
+              <h2>摘要结果</h2>
+            </div>
           </div>
-          {latestResult ? (
+          {focusedResult ? (
             <div className="result-grid">
-              {Object.entries(latestResult.summary).map(([key, value]) => (
+              {Object.entries(focusedResult.summary).map(([key, value]) => (
                 <div className="metric" key={key}>
                   <span>{key}</span>
                   <strong>{String(value)}</strong>
                 </div>
               ))}
-              {latestResult.aggregate_summary.length ? (
+
+              {focusedResult.aggregate_summary.length ? (
                 <div className="result-block">
                   <strong>聚合统计</strong>
-                  {latestResult.aggregate_summary.map((item, index) => (
+                  {focusedResult.aggregate_summary.map((item, index) => (
                     <small key={`${String(item.group)}-${index}`}>
-                      {String(item.dimension)} / {String(item.group)}：{String(item.count)}
+                      {String(item.dimension)} / {String(item.group)} / {String(item.count)}
                     </small>
                   ))}
                 </div>
               ) : null}
-              {latestResult.assertion ? (
+
+              {focusedResult.assertion ? (
                 <div className="result-block">
                   <strong>结论声明</strong>
-                  <small>{latestResult.assertion.statement}</small>
-                  <small>状态：{latestResult.assertion.status}</small>
-                  {latestResult.assertion.reviewer_name ? <small>审核人：{latestResult.assertion.reviewer_name}</small> : null}
-                  {latestResult.assertion.review_comment ? <small>审核意见：{latestResult.assertion.review_comment}</small> : null}
+                  <small>{focusedResult.assertion.statement}</small>
+                  <small>状态：{focusedResult.assertion.status}</small>
+                  {focusedResult.assertion.reviewer_name ? <small>审批人：{focusedResult.assertion.reviewer_name}</small> : null}
+                  {focusedResult.assertion.review_comment ? <small>审批意见：{focusedResult.assertion.review_comment}</small> : null}
                 </div>
               ) : null}
+
               <div className="result-block">
                 <strong>安全边界</strong>
-                {latestResult.local_security_notes.map((note) => (
+                {focusedResult.local_security_notes.map((note) => (
                   <small key={note}>{note}</small>
                 ))}
               </div>
-              {latestResult.assertion?.status === "pending_review" ? (
+
+              {focusedResult.assertion?.status === "pending_review" ? (
                 <div className="result-block">
-                  <strong>结论声明审核</strong>
+                  <strong>结论声明审批</strong>
                   <label>
-                    审核人
+                    审批人
                     <input value={assertionReviewer} onChange={(event) => setAssertionReviewer(event.target.value)} />
                   </label>
                   <label>
@@ -1027,15 +1222,17 @@ export default function App() {
                     <input value={assertionFinalStatement} onChange={(event) => setAssertionFinalStatement(event.target.value)} />
                   </label>
                   <label>
-                    审核意见
+                    审批意见
                     <input value={assertionComment} onChange={(event) => setAssertionComment(event.target.value)} />
                   </label>
-                  <button disabled={isPending} type="button" onClick={() => handleReviewAssertion("approved")}>
-                    审核通过
-                  </button>
-                  <button disabled={isPending} type="button" onClick={() => handleReviewAssertion("rejected")}>
-                    驳回结论
-                  </button>
+                  <div className="panel-actions">
+                    <button disabled={isPending} type="button" onClick={() => void handleReviewAssertion("approved")}>
+                      审批通过
+                    </button>
+                    <button disabled={isPending} type="button" onClick={() => void handleReviewAssertion("rejected")}>
+                      驳回
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -1046,8 +1243,10 @@ export default function App() {
 
         <article className="panel">
           <div className="panel__heading">
-            <p className="eyebrow">09 Operators</p>
-            <h2>算子库</h2>
+            <div>
+              <p className="eyebrow">09 Operators</p>
+              <h2>算子库</h2>
+            </div>
           </div>
           <div className="task-list">
             {operators.map((operator) => (
@@ -1062,13 +1261,15 @@ export default function App() {
 
         <article className="panel">
           <div className="panel__heading">
-            <p className="eyebrow">10 Export</p>
-            <h2>安全输出审批</h2>
+            <div>
+              <p className="eyebrow">10 Export</p>
+              <h2>安全输出审批</h2>
+            </div>
           </div>
           <form className="task-form" onSubmit={handleCreateExportRequest}>
             <label>
               输出类型
-              <select value={exportType} onChange={(event) => setExportType(event.target.value as typeof exportType)}>
+              <select value={exportType} onChange={(event) => setExportType(event.target.value as ExportType)}>
                 <option value="receipt">执行回执</option>
                 <option value="assertion">结论声明</option>
                 <option value="aggregate_summary">聚合统计</option>
@@ -1086,10 +1287,11 @@ export default function App() {
               输出用途
               <input value={exportPurpose} onChange={(event) => setExportPurpose(event.target.value)} />
             </label>
-            <button disabled={isPending || !latestResult} type="submit">
+            <button disabled={isPending || !focusedResult} type="submit">
               创建输出申请
             </button>
           </form>
+
           <div className="task-list">
             {exportRequests.slice(-4).reverse().map((request) => (
               <div className="task-row" key={request.id}>
@@ -1097,22 +1299,23 @@ export default function App() {
                 <span>{request.status}</span>
                 <small>申请人：{request.requester_name}</small>
                 {request.status !== "approved" ? (
-                  <button disabled={isPending} type="button" onClick={() => handleApproveExportRequest(request.id)}>
+                  <button disabled={isPending} type="button" onClick={() => void handleApproveExportRequest(request.id)}>
                     审批输出
                   </button>
                 ) : (
-                  <>
-                    <button disabled={isPending} type="button" onClick={() => handlePreviewExportPackage(request.id)}>
+                  <div className="panel-actions">
+                    <button disabled={isPending} type="button" onClick={() => void handlePreviewExportPackage(request.id)}>
                       预览输出包
                     </button>
-                    <button disabled={isPending} type="button" onClick={() => handlePersistExportFile(request.id)}>
+                    <button disabled={isPending} type="button" onClick={() => void handlePersistExportFile(request.id)}>
                       写入本域文件
                     </button>
-                  </>
+                  </div>
                 )}
               </div>
             ))}
           </div>
+
           {exportPackage ? (
             <div className="result-block">
               <strong>输出包预览</strong>
@@ -1122,6 +1325,7 @@ export default function App() {
               ))}
             </div>
           ) : null}
+
           {exportFiles.length ? (
             <div className="result-block">
               <strong>本域输出文件</strong>
@@ -1137,7 +1341,7 @@ export default function App() {
                 归档封存
               </button>
               {exportFiles.slice(-4).reverse().map((file) => (
-                <label key={file.id}>
+                <label className="inline-check" key={file.id}>
                   <input
                     checked={selectedExportFileIds.includes(file.id)}
                     type="checkbox"
@@ -1147,21 +1351,22 @@ export default function App() {
                       )
                     }
                   />
-                  {file.file_name} · {file.byte_size} bytes · {file.sha256.slice(0, 12)}
+                  {file.file_name} / {file.byte_size} bytes / {file.sha256.slice(0, 12)}
                 </label>
               ))}
             </div>
           ) : null}
+
           {exportArchives.length ? (
             <div className="result-block">
               <strong>归档封存与验签报告</strong>
               {exportArchives.slice(-4).reverse().map((archive) => (
-                <div key={archive.id}>
+                <div className="panel-actions" key={archive.id}>
                   <small>
-                    {archive.id} · {archive.file_count} 个文件 · 验签 {archive.verification.valid ? "通过" : "失败"}
+                    {archive.id} / {archive.file_count} 文件 / {archive.verification.valid ? "验签通过" : "待复核"}
                   </small>
-                  <button disabled={isPending} type="button" onClick={() => handleVerifyExportArchive(archive.id)}>
-                    重新验签报告
+                  <button disabled={isPending} type="button" onClick={() => void handleVerifyExportArchive(archive.id)}>
+                    重新验签
                   </button>
                 </div>
               ))}
@@ -1169,7 +1374,6 @@ export default function App() {
           ) : null}
         </article>
       </section>
-      )}
     </main>
   );
 }

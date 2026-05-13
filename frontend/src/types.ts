@@ -77,6 +77,7 @@ export type Task = {
   status: "draft" | "ready" | "running" | "completed" | "failed";
   description?: string | null;
   created_at: string;
+  updated_at?: string | null;
 };
 
 export type TaskResult = {

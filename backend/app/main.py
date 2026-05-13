@@ -40,6 +40,7 @@ from app.models.schemas import (
     RulePackageRevision,
     Task,
     TaskCreate,
+    TaskUpdate,
     TaskResult,
     TrustedSignerInfo,
 )
@@ -741,13 +742,66 @@ def list_tasks() -> list[Task]:
     return [Task(**item) for item in load_state()["tasks"]]
 
 
-@app.post("/api/tasks", response_model=Task)
-def create_task(payload: TaskCreate) -> Task:
-    state = load_state()
+def resolve_task_payload(
+    payload: TaskCreate | TaskUpdate,
+    state: dict[str, list[dict[str, object]]],
+) -> tuple[str | None, str | None, int | None]:
     dataset_ids = {item["id"] for item in state["datasets"]}
     missing_ids = [dataset_id for dataset_id in payload.dataset_ids if dataset_id not in dataset_ids]
     if missing_ids:
         raise HTTPException(status_code=400, detail={"missing_dataset_ids": missing_ids})
+
+    resolved_rule_package_id = payload.rule_package_id
+    resolved_rule_package_revision_id = payload.rule_package_revision_id
+
+    if payload.rule_package_revision_id:
+        revisions = {item["id"]: item for item in state.get("rule_package_revisions", [])}
+        revision = revisions.get(payload.rule_package_revision_id)
+        if revision is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"missing_rule_package_revision_id": payload.rule_package_revision_id},
+            )
+        if revision["status"] != "approved":
+            raise HTTPException(status_code=400, detail={"rule_package_status": "规则包修订版尚未审批通过"})
+        resolved_rule_package_id = str(revision["rule_package_id"])
+    elif payload.rule_package_id:
+        packages = {item["id"]: item for item in state["rule_packages"]}
+        if payload.rule_package_id not in packages:
+            raise HTTPException(status_code=400, detail={"missing_rule_package_id": payload.rule_package_id})
+        if packages[payload.rule_package_id]["status"] != "approved":
+            raise HTTPException(status_code=400, detail={"rule_package_status": "规则包尚未审批通过"})
+        resolved_rule_package_revision_id = packages[payload.rule_package_id].get("current_revision_id")
+
+    if payload.output_policy == "aggregate_summary":
+        threshold = payload.aggregate_threshold or AGGREGATE_MIN_THRESHOLD
+        if threshold < AGGREGATE_MIN_THRESHOLD:
+            raise HTTPException(
+                status_code=400,
+                detail={"aggregate_threshold": f"聚合统计阈值不得低于 {AGGREGATE_MIN_THRESHOLD}"},
+            )
+        if not payload.aggregate_group_by:
+            raise HTTPException(status_code=400, detail={"aggregate_group_by": "聚合统计必须选择单一分组维度"})
+        if payload.aggregate_group_by not in AGGREGATE_ALLOWED_DIMENSIONS:
+            raise HTTPException(status_code=400, detail={"aggregate_group_by": "不允许的分组维度"})
+    else:
+        threshold = None
+
+    return resolved_rule_package_id, resolved_rule_package_revision_id, threshold
+
+
+def task_editable(task_id: str, state: dict[str, list[dict[str, object]]]) -> tuple[bool, str | None]:
+    result = next((item for item in state["results"] if item["task_id"] == task_id), None)
+    if result is not None:
+        return False, "该任务已经产出执行结果，请复制为新草稿后再调整。"
+    return True, None
+
+
+@app.post("/api/tasks", response_model=Task)
+def create_task(payload: TaskCreate) -> Task:
+    state = load_state()
+    resolved_rule_package_id, resolved_rule_package_revision_id, threshold = resolve_task_payload(payload, state)
+    now = utc_now()
 
     resolved_rule_package_id = payload.rule_package_id
     resolved_rule_package_revision_id = payload.rule_package_revision_id
@@ -794,7 +848,9 @@ def create_task(payload: TaskCreate) -> Task:
         aggregate_threshold=threshold,
         aggregate_group_by=payload.aggregate_group_by,
         description=payload.description,
-        created_at=utc_now(),
+        status="ready" if payload.dataset_ids else "draft",
+        created_at=now,
+        updated_at=now,
     )
     add_record("tasks", task.model_dump())
     write_audit(
@@ -812,6 +868,78 @@ def create_task(payload: TaskCreate) -> Task:
         },
     )
     return task
+
+
+@app.put("/api/tasks/{task_id}", response_model=Task)
+def update_task(task_id: str, payload: TaskUpdate) -> Task:
+    state = load_state()
+    editable, reason = task_editable(task_id, state)
+    if not editable:
+        raise HTTPException(status_code=400, detail=reason)
+
+    tasks = [Task(**item) for item in state["tasks"]]
+    resolved_rule_package_id, resolved_rule_package_revision_id, threshold = resolve_task_payload(payload, state)
+    target: Task | None = None
+    updated: list[dict[str, object]] = []
+    now = utc_now()
+
+    for task in tasks:
+        if task.id == task_id:
+            task.name = payload.name
+            task.dataset_ids = payload.dataset_ids
+            task.rule_package_id = resolved_rule_package_id
+            task.rule_package_revision_id = resolved_rule_package_revision_id
+            task.output_policy = payload.output_policy
+            task.aggregate_threshold = threshold
+            task.aggregate_group_by = payload.aggregate_group_by
+            task.description = payload.description
+            task.status = "ready" if payload.dataset_ids else "draft"
+            task.updated_at = now
+            target = task
+        updated.append(task.model_dump())
+
+    if target is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    replace_collection("tasks", updated)
+    write_audit(
+        action="task.update",
+        object_type="task",
+        object_id=target.id,
+        summary=f"更新本域任务草稿：{target.name}",
+        metadata={
+            "dataset_ids": target.dataset_ids,
+            "rule_package_id": target.rule_package_id,
+            "rule_package_revision_id": target.rule_package_revision_id,
+            "output_policy": target.output_policy,
+            "aggregate_threshold": target.aggregate_threshold,
+            "aggregate_group_by": target.aggregate_group_by,
+        },
+    )
+    return target
+
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: str) -> dict[str, str]:
+    state = load_state()
+    editable, reason = task_editable(task_id, state)
+    if not editable:
+        raise HTTPException(status_code=400, detail=reason)
+
+    tasks = [Task(**item) for item in state["tasks"]]
+    target = next((task for task in tasks if task.id == task_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    replace_collection("tasks", [task.model_dump() for task in tasks if task.id != task_id])
+    write_audit(
+        action="task.delete",
+        object_type="task",
+        object_id=target.id,
+        summary=f"删除本域任务草稿：{target.name}",
+        metadata={"status": target.status, "output_policy": target.output_policy},
+    )
+    return {"status": "deleted"}
 
 
 @app.post("/api/tasks/{task_id}/execute", response_model=TaskResult)
@@ -848,8 +976,10 @@ def execute_task(task_id: str) -> TaskResult:
             package_rules = package_item.get("rules", []) if package_item else []
         result = execute_local_task(task, dataset, mapping, package_rules)
         task.status = "completed"
+        task.updated_at = utc_now()
     except ValueError as error:
         task.status = "failed"
+        task.updated_at = utc_now()
         task_items[task_index] = task.model_dump()
         replace_collection("tasks", task_items)
         write_audit(

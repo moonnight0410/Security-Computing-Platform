@@ -103,6 +103,27 @@ class TaskCreate(BaseModel):
     aggregate_group_by: Literal["department", "matter_type", "month"] | None = None
     description: str | None = None
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return required_text(value)
+
+
+class TaskUpdate(BaseModel):
+    name: str
+    dataset_ids: list[str] = Field(default_factory=list)
+    rule_package_id: str | None = None
+    rule_package_revision_id: str | None = None
+    output_policy: Literal["local_only", "execution_receipt", "manual_assertion", "aggregate_summary"] = "local_only"
+    aggregate_threshold: int | None = None
+    aggregate_group_by: Literal["department", "matter_type", "month"] | None = None
+    description: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return required_text(value)
+
 
 class Task(BaseModel):
     id: str
@@ -116,6 +137,7 @@ class Task(BaseModel):
     status: Literal["draft", "ready", "running", "completed", "failed"] = "draft"
     description: str | None = None
     created_at: str
+    updated_at: str | None = None
 
 
 def required_text(value: str) -> str:
